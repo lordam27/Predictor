@@ -1,4 +1,5 @@
 import math
+import datetime
 import requests
 import pandas as pd
 import streamlit as st
@@ -33,15 +34,19 @@ LIGAS = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE API OPTIMIZADAS
+# 2. FUNCIONES DE API ROBUSTAS
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=86400)
 def obtener_equipos_liga(liga_code):
+    """Obtiene la lista de equipos de la liga."""
     url = f"{BASE_URL}competitions/{liga_code}/teams"
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
+        if res.status_code == 429:
+            st.warning("⚠️ Límite de peticiones alcanzado. Espera 1 minuto y recarga la página.")
+            return []
         if res.status_code != 200:
-            st.error(f"Error {res.status_code} al obtener equipos de la API.")
+            st.error(f"Error {res.status_code} de la API al obtener equipos.")
             return []
         teams_data = res.json().get("teams", [])
         equipos = [{"id": t["id"], "nombre": t["name"]} for t in teams_data]
@@ -53,30 +58,46 @@ def obtener_equipos_liga(liga_code):
 @st.cache_data(ttl=3600)
 def obtener_partidos_finalizados_liga(liga_code):
     """
-    Descarga TODOS los partidos jugados de la liga en una sola llamada.
-    Evita saturar el límite de peticiones de la API (HTTP 429).
+    Descarga los partidos jugados. Si la temporada actual no tiene partidos aún,
+    hace un fallback automático a la temporada anterior.
     """
-    url = f"{BASE_URL}competitions/{liga_code}/matches?status=FINISHED"
+    url_actual = f"{BASE_URL}competitions/{liga_code}/matches?status=FINISHED"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        if res.status_code != 200:
-            st.error(f"Error {res.status_code} de la API al obtener partidos. Respuesta: {res.text}")
+        res = requests.get(url_actual, headers=HEADERS, timeout=10)
+        
+        if res.status_code == 429:
+            st.warning("⚠️ Has superado el límite de 10 peticiones/minuto de la API. Espera 60 segundos.")
             return []
-        return res.json().get("matches", [])
+            
+        if res.status_code == 200:
+            matches = res.json().get("matches", [])
+            if len(matches) > 10:  # Si hay suficientes partidos en la temporada actual
+                return matches
+
+        # FALLBACK: Si no hay partidos suficientes en la temporada actual, pedimos la anterior
+        anio_previo = datetime.datetime.now().year - 1
+        url_prev = f"{BASE_URL}competitions/{liga_code}/matches?status=FINISHED&season={anio_previo}"
+        res_prev = requests.get(url_prev, headers=HEADERS, timeout=10)
+        
+        if res_prev.status_code == 200:
+            matches_prev = res_prev.json().get("matches", [])
+            if matches_prev:
+                st.info(f"ℹ️ Usando datos de la temporada {anio_previo} por inicio/descanso de liga.")
+                return matches_prev
+
+        return []
     except Exception as e:
         st.error(f"Error al conectar con la API: {e}")
         return []
 
 def calcular_metricas_equipo(equipo_id, todos_partidos, limite=6):
-    """
-    Filtra en memoria local los últimos N partidos de un equipo.
-    """
+    """Filtra y calcula la forma reciente del equipo."""
     partidos_equipo = [
         m for m in todos_partidos 
         if m["homeTeam"]["id"] == equipo_id or m["awayTeam"]["id"] == equipo_id
     ]
     
-    # Ordenar por fecha descendente (más recientes primero)
+    # Ordenar por fecha (más recientes primero)
     partidos_equipo.sort(key=lambda x: x["utcDate"], reverse=True)
     ultimos = partidos_equipo[:limite]
 
@@ -169,7 +190,7 @@ liga_sel = st.sidebar.selectbox("1. Selecciona Competición", list(LIGAS.keys())
 equipos = obtener_equipos_liga(liga_sel)
 
 if not equipos:
-    st.error("No se pudieron cargar los equipos de esta liga.")
+    st.error("No se pudieron cargar los equipos de esta liga. Si acabas de recargar varias veces, espera 1 minuto por el límite de la API.")
     st.stop()
 
 nombres_equipos = [e["nombre"] for e in equipos]
@@ -184,14 +205,12 @@ if st.sidebar.button("🚀 Calcular Predicción", type="primary"):
     id_vis = id_map[visitante_nom]
 
     with st.spinner("Cargando historial de la liga y procesando datos reales..."):
-        # Descarga los partidos finalizados de toda la liga (una sola llamada API)
         partidos_liga = obtener_partidos_finalizados_liga(liga_sel)
 
         if not partidos_liga:
-            st.warning("No se encontraron partidos finalizados en la liga seleccionada o la API falló.")
+            st.warning("No se pudieron obtener partidos finalizados para esta liga en este momento.")
             st.stop()
 
-        # Procesa en memoria local el rendimiento de cada equipo
         stats_loc = calcular_metricas_equipo(id_local, partidos_liga)
         stats_vis = calcular_metricas_equipo(id_vis, partidos_liga)
 
@@ -208,12 +227,12 @@ if st.sidebar.button("🚀 Calcular Predicción", type="primary"):
     with c1:
         st.metric(f"Forma {local_nom}", f"{stats_loc['forma_pct']}%")
         st.progress(stats_loc["forma_pct"] / 100)
-        st.caption(f"Basado en sus últimos **{stats_loc['partidos']}** partidos jugados.")
+        st.caption(f"Basado en sus últimos **{stats_loc['partidos']}** partidos analizados.")
         st.caption(f"Ataque: **{stats_loc['atq']:.2f}** goles/partido | Defensa: **{stats_loc['def']:.2f}** encajados/partido")
     with c2:
         st.metric(f"Forma {visitante_nom}", f"{stats_vis['forma_pct']}%")
         st.progress(stats_vis["forma_pct"] / 100)
-        st.caption(f"Basado en sus últimos **{stats_vis['partidos']}** partidos jugados.")
+        st.caption(f"Basado en sus últimos **{stats_vis['partidos']}** partidos analizados.")
         st.caption(f"Ataque: **{stats_vis['atq']:.2f}** goles/partido | Defensa: **{stats_vis['def']:.2f}** encajados/partido")
 
     st.divider()
