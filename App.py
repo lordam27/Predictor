@@ -29,19 +29,6 @@ st.markdown("""
         max-width: 80px;
         object-fit: contain;
     }
-    .value-badge-positive {
-        background-color: #28a745;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 6px;
-        font-weight: bold;
-    }
-    .value-badge-negative {
-        background-color: #dc3545;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 6px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -351,7 +338,7 @@ if st.sidebar.button("🚀 Calcular Predicción", type="primary"):
         <div class="match-card">
             <div style="display: flex; justify-content: space-around; align-items: center; text-align: center;">
                 <div style="flex: 1;">
-                    <img src="{eq_loc.get('crest', '')}" class="crest-img" KeyError/><br>
+                    <img src="{eq_loc.get('crest', '')}" class="crest-img"/><br>
                     <h2 style="margin: 5px 0;">{local_nom}</h2>
                     <span style="color: #cbd5e0;">(LOCAL)</span>
                 </div>
@@ -365,7 +352,7 @@ if st.sidebar.button("🚀 Calcular Predicción", type="primary"):
                     </span>
                 </div>
                 <div style="flex: 1;">
-                    <img src="{eq_vis.get('crest', '')}" class="crest-img" KeyError/><br>
+                    <img src="{eq_vis.get('crest', '')}" class="crest-img"/><br>
                     <h2 style="margin: 5px 0;">{visitante_nom}</h2>
                     <span style="color: #cbd5e0;">(VISITANTE)</span>
                 </div>
@@ -387,7 +374,7 @@ if st.sidebar.button("🚀 Calcular Predicción", type="primary"):
         c1, c2, c3 = st.columns(3)
         c1.metric(f"Victoria {local_nom} (1)", f"{res_1x2['1']:.1f}%")
         c2.metric("Empate (X)", f"{res_1x2['X']:.1f}%")
-        c3.metric(f"Victoria {visitante_nom} (2)", f"{res_2 = res_1x2['2']:.1f}%" if False else f"{res_1x2['2']:.1f}%")
+        c3.metric(f"Victoria {visitante_nom} (2)", f"{res_1x2['2']:.1f}%")
 
         st.divider()
 
