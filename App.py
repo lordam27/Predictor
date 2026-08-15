@@ -1,14 +1,15 @@
 import math
+import time
 import datetime
 import requests
 import pandas as pd
 import streamlit as st
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN Y ESTILOS DE INTERFAZ
+# 1. CONFIGURACIÓN Y ESTILOS
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Football Quant Pro & Matchday Hub",
+    page_title="Football Quant Pro | H2H & Form Engine",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -27,14 +28,9 @@ st.markdown("""
     .match-today-card {
         background: rgba(18, 37, 28, 0.7);
         border: 1px solid #1e3a2f;
-        border-radius: 12px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
-        transition: transform 0.2s;
-    }
-    .match-today-card:hover {
-        border-color: #00ff87;
-        transform: translateY(-2px);
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 8px;
     }
     .scoreboard-card {
         background: rgba(15, 30, 23, 0.85);
@@ -49,6 +45,12 @@ st.markdown("""
         max-height: 75px;
         filter: drop-shadow(0px 4px 8px rgba(0,0,0,0.6));
     }
+    .form-badge {
+        font-weight: bold;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 0.9rem;
+    }
     [data-testid="stMetricValue"] {
         color: #00ff87 !important;
         font-family: 'Trebuchet MS', sans-serif;
@@ -57,7 +59,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONEXIÓN Y DATOS (12 LIGAS + PARTIDOS DE HOY)
+# 2. CONEXIÓN API & CARGA DE DATOS ROBUTA
 # -----------------------------------------------------------------------------
 try:
     API_KEY = st.secrets["FOOTBALL_API_KEY"]
@@ -68,32 +70,31 @@ except KeyError:
 HEADERS = {"X-Auth-Token": API_KEY}
 BASE_URL = "https://api.football-data.org/v4/"
 
-# LAS 12 COMPETICIONES DEL PLAN GRATUITO DE FOOTBALL-DATA.ORG
 LIGAS = {
-    "PD": "🇪🇸 LaLiga",
-    "PL": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League",
-    "SA": "🇮🇹 Serie A",
-    "BL1": "🇩🇪 Bundesliga",
-    "FL1": "🇫🇷 Ligue 1",
-    "CL": "🇪🇺 Champions League",
-    "DED": "🇳🇱 Eredivisie",
-    "PPL": "🇵🇹 Primeira Liga",
-    "ELC": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Championship",
-    "BSA": "🇧🇷 Brasileirão Série A",
-    "WC": "🏆 Copa del Mundo",
-    "EC": "🇪🇺 Eurocopa"
+    "PD": "🇪🇸 LaLiga", "PL": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League", "SA": "🇮🇹 Serie A",
+    "BL1": "🇩🇪 Bundesliga", "FL1": "🇫🇷 Ligue 1", "CL": "🇪🇺 Champions League",
+    "DED": "🇳🇱 Eredivisie", "PPL": "🇵🇹 Primeira Liga", "ELC": "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Championship",
+    "BSA": "🇧🇷 Brasileirão Série A", "WC": "🏆 Copa del Mundo", "EC": "🇪🇺 Eurocopa"
 }
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=900)
 def obtener_partidos_hoy():
-    """Consulta la agenda de partidos programados para la fecha actual."""
-    hoy = datetime.date.today().strftime("%Y-%m-%d")
-    url = f"{BASE_URL}matches?dateFrom={hoy}&dateTo={hoy}"
+    """Obtiene partidos de hoy/mañana con ventana ampliada para evitar problemas de UTC."""
+    hoy_dt = datetime.date.today()
+    desde = (hoy_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    hasta = (hoy_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    url = f"{BASE_URL}matches?dateFrom={desde}&dateTo={hasta}"
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
         if res.status_code == 200:
-            return res.json().get("matches", [])
-    except:
+            matches = res.json().get("matches", [])
+            # Filtrar solo las 12 ligas soportadas
+            codigos_soportados = set(LIGAS.keys())
+            return [m for m in matches if m.get("competition", {}).get("code") in codigos_soportados]
+        elif res.status_code == 429:
+            st.warning("⚠️ Límite de peticiones API alcanzado (10/min). Espera unos segundos y recarga.")
+    except Exception as e:
         pass
     return []
 
@@ -122,140 +123,182 @@ def obtener_historico_dos_anios(liga_code):
                 if idx == 0:
                     programados = [m for m in matches if m.get("status") in ["SCHEDULED", "TIMED", "LIVE"]]
                 jugados.extend([m for m in matches if m.get("status") == "FINISHED"])
+            time.sleep(0.1) # Evitar Rate Limit
         except:
             continue
+            
+    # Ordenar partidos de más reciente a más antiguo
+    jugados = sorted(jugados, key=lambda x: x.get("utcDate", ""), reverse=True)
     return jugados, programados
 
 # -----------------------------------------------------------------------------
-# 3. MOTOR MATEMÁTICO & POWER RANKING
+# 3. FUNCIONES DEDICADAS: H2H, ÚLTIMOS 20 Y FORMA ACTUAL
 # -----------------------------------------------------------------------------
-def calcular_metricas_equipo(equipo_id, partidos_jugados, limite=40):
-    partidos = [m for m in partidos_jugados if m["homeTeam"]["id"] == equipo_id or m["awayTeam"]["id"] == equipo_id][:limite]
-    if not partidos:
-        return 1.2, 1.1, 1.0
+def obtener_ultimos_partidos(partidos_jugados, equipo_id, n=20):
+    """Devuelve los últimos N partidos jugados por un equipo con detalle W/D/L."""
+    partidos_eq = [m for m in partidos_jugados if m["homeTeam"]["id"] == equipo_id or m["awayTeam"]["id"] == equipo_id][:n]
+    registros = []
 
-    gf_weighted, gc_weighted, peso_total = 0.0, 0.0, 0.0
-    puntos_totales = 0
+    for m in partidos_eq:
+        is_home = m["homeTeam"]["id"] == equipo_id
+        score = m["score"]["fullTime"]
+        gf = score["home"] if is_home else score["away"]
+        gc = score["away"] if is_home else score["home"]
+        
+        if gf is None or gc is None: continue
 
+        if gf > gc:
+            res_str = "Victoria"
+            badge = "🟢 V"
+            pts = 3
+        elif gf == gc:
+            res_str = "Empate"
+            badge = "🟡 E"
+            pts = 1
+        else:
+            res_str = "Derrota"
+            badge = "🔴 D"
+            pts = 0
+
+        rival = m["awayTeam"]["name"] if is_home else m["homeTeam"]["name"]
+        
+        registros.append({
+            "Fecha": m.get("utcDate", "")[:10],
+            "Rival": rival,
+            "Condición": "Local" if is_home else "Visitante",
+            "Resultado": f"{score['home']} - {score['away']}",
+            "Estado": badge,
+            "Puntos": pts,
+            "GF": gf,
+            "GC": gc
+        })
+
+    return pd.DataFrame(registros)
+
+def calcular_forma_resumen(df_partidos):
+    """Calcula la racha reciente (últimos 5 partidos) y puntos obtenidos."""
+    if df_partidos.empty:
+        return "Sin datos", 0.0
+
+    ult_5 = df_partidos.head(5)
+    racha = " ".join(ult_5["Estado"].tolist())
+    ppm_5 = ult_5["Puntos"].sum() / len(ult_5)
+    return racha, ppm_5
+
+def obtener_enfrentamientos_h2h(partidos_jugados, id_loc, id_vis):
+    """Calcula el historial cara a cara cara entre los dos equipos seleccionados."""
+    h2h_matches = [
+        m for m in partidos_jugados 
+        if (m["homeTeam"]["id"] == id_loc and m["awayTeam"]["id"] == id_vis) or 
+           (m["homeTeam"]["id"] == id_vis and m["awayTeam"]["id"] == id_loc)
+    ]
+
+    loc_wins, draws, vis_wins = 0, 0, 0
+    registros_h2h = []
+
+    for m in h2h_matches:
+        score = m["score"]["fullTime"]
+        g_home = score["home"]
+        g_away = score["away"]
+        if g_home is None or g_away is None: continue
+
+        is_loc_home = (m["homeTeam"]["id"] == id_loc)
+
+        if g_home > g_away:
+            if is_loc_home: loc_wins += 1
+            else: vis_wins += 1
+        elif g_home < g_away:
+            if is_loc_home: vis_wins += 1
+            else: loc_wins += 1
+        else:
+            draws += 1
+
+        registros_h2h.append({
+            "Fecha": m.get("utcDate", "")[:10],
+            "Local": m["homeTeam"]["name"],
+            "Marcador": f"{g_home} - {g_away}",
+            "Visitante": m["awayTeam"]["name"],
+            "Competición": m.get("competition", {}).get("name", "Liga")
+        })
+
+    return loc_wins, draws, vis_wins, pd.DataFrame(registros_h2h)
+
+# -----------------------------------------------------------------------------
+# 4. MOTOR DE PREDICCIÓN (POISSON)
+# -----------------------------------------------------------------------------
+def calcular_metricas_base(equipo_id, partidos_jugados):
+    partidos = [m for m in partidos_jugados if m["homeTeam"]["id"] == equipo_id or m["awayTeam"]["id"] == equipo_id][:30]
+    if not partidos: return 1.2, 1.1
+    
+    gf_tot, gc_tot, peso_tot = 0.0, 0.0, 0.0
     for idx, m in enumerate(partidos):
         is_home = m["homeTeam"]["id"] == equipo_id
         score = m["score"]["fullTime"]
         gf = score["home"] if is_home else score["away"]
         gc = score["away"] if is_home else score["home"]
         if gf is None or gc is None: continue
-
-        if gf > gc: puntos_totales += 3
-        elif gf == gc: puntos_totales += 1
-
-        peso = math.exp(-0.04 * idx)
-        peso_total += peso
-        gf_weighted += gf * peso
-        gc_weighted += gc * peso
-
-    return (gf_weighted / peso_total), (gc_weighted / peso_total), (puntos_totales / len(partidos))
-
-def generar_power_ranking(equipos, partidos_jugados):
-    ranking_data = []
-    for eq in equipos:
-        xg_atq, xg_def, ppm = calcular_metricas_equipo(eq["id"], partidos_jugados)
-        raw_rating = (ppm * 25.0) + (xg_atq * 25.0) - (xg_def * 15.0)
-        ranking_data.append({
-            "Equipo": eq["nombre"],
-            "xG Ataque": round(xg_atq, 2),
-            "xG Defensa": round(xg_def, 2),
-            "PPM": round(ppm, 2),
-            "raw_score": raw_rating
-        })
-
-    df = pd.DataFrame(ranking_data)
-    if df.empty: return df
-
-    min_s, max_s = df["raw_score"].min(), df["raw_score"].max()
-    df["Power Rating"] = ((df["raw_score"] - min_s) / (max_s - min_s) * 100).round(1) if max_s > min_s else 50.0
-    df = df.sort_values(by="Power Rating", ascending=False).reset_index(drop=True)
-    df.index = df.index + 1
-    return df
+        
+        peso = math.exp(-0.05 * idx)
+        peso_tot += peso
+        gf_tot += gf * peso
+        gc_tot += gc * peso
+        
+    return (gf_tot / peso_tot), (gc_tot / peso_tot)
 
 def poisson_pmf(lmbda, k):
     return (lmbda ** k) * math.exp(-lmbda) / math.factorial(k) if lmbda > 0 else 0.0
 
-def dixon_coles_tau(x, y, lmbda, mu, rho=-0.11):
-    if x == 0 and y == 0: return 1.0 - (lmbda * mu * rho)
-    elif x == 1 and y == 0: return 1.0 + (mu * rho)
-    elif x == 0 and y == 1: return 1.0 + (lmbda * rho)
-    elif x == 1 and y == 1: return 1.0 - rho
-    return 1.0
-
-def calcular_simulacion_completa(exp_loc, exp_vis):
-    matrix, total_prob = [], 0.0
-    for g_loc in range(7):
-        fila = []
-        for g_vis in range(7):
-            p = max(0.0, poisson_pmf(exp_loc, g_loc) * poisson_pmf(exp_vis, g_vis) * dixon_coles_tau(g_loc, g_vis, exp_loc, exp_vis))
-            fila.append(p)
-            total_prob += p
-        matrix.append(fila)
-
-    prob_1, prob_x, prob_2, prob_over25, prob_btts = 0.0, 0.0, 0.0, 0.0, 0.0
-    marcadores = []
-
-    for g_loc in range(7):
-        for g_vis in range(7):
-            p_norm = matrix[g_loc][g_vis] / total_prob
-            if g_loc > g_vis: prob_1 += p_norm
-            elif g_loc == g_vis: prob_x += p_norm
-            else: prob_2 += p_norm
-
-            if (g_loc + g_vis) > 2.5: prob_over25 += p_norm
-            if g_loc > 0 and g_vis > 0: prob_btts += p_norm
-            marcadores.append({"score": f"{g_loc}-{g_vis}", "prob": p_norm * 100})
-
-    marcadores = sorted(marcadores, key=lambda x: x["prob"], reverse=True)
-    return {
-        "1": prob_1, "X": prob_x, "2": prob_2,
-        "over25": prob_over25, "under25": 1.0 - prob_over25,
-        "btts_si": prob_btts, "btts_no": 1.0 - prob_btts
-    }, marcadores
+def calcular_simulacion(exp_loc, exp_vis):
+    prob_1, prob_x, prob_2 = 0.0, 0.0, 0.0
+    for g_loc in range(6):
+        for g_vis in range(6):
+            p = poisson_pmf(exp_loc, g_loc) * poisson_pmf(exp_vis, g_vis)
+            if g_loc > g_vis: prob_1 += p
+            elif g_loc == g_vis: prob_x += p
+            else: prob_2 += p
+    tot = prob_1 + prob_x + prob_2
+    return {"1": prob_1/tot, "X": prob_x/tot, "2": prob_2/tot}
 
 # -----------------------------------------------------------------------------
-# 4. VISTA DE INICIO & EVENTOS DEL DÍA
+# 5. VISTA DE INICIO & EVENTOS
 # -----------------------------------------------------------------------------
-st.title("⚽ Football Analytics & Matchday Hub")
+st.title("⚽ Football Analytics Engine")
 
 partidos_hoy = obtener_partidos_hoy()
 
-with st.expander("📅 **EVENTOS DISPONIBLES HOY** (Haz clic para ver los partidos de la jornada)", expanded=True):
+with st.expander("📅 **PARTIDOS PRÓXIMOS / EN VIVO**", expanded=True):
     if partidos_hoy:
-        st.write(f"Se han encontrado **{len(partidos_hoy)} partido(s)** programados para el día de hoy:")
+        st.write(f"Se han encontrado **{len(partidos_hoy)} partido(s)** disponibles en las ligas monitorizadas:")
         cols_hoy = st.columns(min(3, len(partidos_hoy)))
         
-        for idx, m in enumerate(partidos_hoy):
+        for idx, m in enumerate(partidos_hoy[:6]):
             col_idx = idx % min(3, len(partidos_hoy))
             comp_nom = m.get("competition", {}).get("name", "Liga")
             loc_n = m["homeTeam"]["name"]
             vis_n = m["awayTeam"]["name"]
+            estado = m.get("status", "")
             hora = m.get("utcDate", "")[11:16] + " UTC"
             
             cols_hoy[col_idx].markdown(f"""
                 <div class="match-today-card">
-                    <span style="color: #00ff87; font-size: 0.75rem; font-weight: bold;">{comp_nom} • {hora}</span><br>
+                    <span style="color: #00ff87; font-size: 0.75rem; font-weight: bold;">{comp_nom} • {hora} ({estado})</span><br>
                     <strong>{loc_n}</strong> vs <strong>{vis_n}</strong>
                 </div>
             """, unsafe_allow_html=True)
     else:
-        st.info("ℹ️ No hay partidos de las 12 ligas soportadas programados para el día de hoy. Utiliza el selector lateral para analizar cualquier encuentro futuro de la temporada.")
+        st.info("ℹ️ No hay partidos en directo o para hoy en las 12 ligas soportadas. Utiliza el selector lateral para analizar cualquier equipo.")
 
 st.divider()
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES EN SIDEBAR Y PREPARACIÓN DEL PARTIDO
+# 6. CONTROLES Y SELECCIÓN DE EQUIPOS
 # -----------------------------------------------------------------------------
-st.sidebar.header("⚙️ Selector de Partido")
-liga_sel = st.sidebar.selectbox("Competición (12 disponibles)", list(LIGAS.keys()), format_func=lambda x: LIGAS[x])
+st.sidebar.header("⚙️ Selector de Encuentro")
+liga_sel = st.sidebar.selectbox("Competición", list(LIGAS.keys()), format_func=lambda x: LIGAS[x])
 
 equipos = obtener_equipos(liga_sel)
 if not equipos:
-    st.error("No se pudieron cargar los datos de la liga seleccionada.")
+    st.error("Error al cargar los datos de la liga seleccionada.")
     st.stop()
 
 equipos_dict = {e["nombre"]: e for e in equipos}
@@ -274,91 +317,110 @@ else:
 eq_loc = equipos_dict.get(local_nom, {})
 eq_vis = equipos_dict.get(visitante_nom, {})
 
-atq_loc, def_loc, _ = calcular_metricas_equipo(eq_loc.get("id"), jugados)
-atq_vis, def_vis, _ = calcular_metricas_equipo(eq_vis.get("id"), jugados)
+id_loc = eq_loc.get("id")
+id_vis = eq_vis.get("id")
 
-exp_local = max(0.25, ((atq_loc * def_vis) / 1.30) * 1.10)
-exp_vis = max(0.25, ((atq_vis * def_loc) / 1.30))
+# CÁLCULO DE DATOS E HISTORIALES
+df_loc_20 = obtener_ultimos_partidos(jugados, id_loc, n=20)
+df_vis_20 = obtener_ultimos_partidos(jugados, id_vis, n=20)
 
-probs_mercados, marcadores = calcular_simulacion_completa(exp_local, exp_vis)
-top_m = marcadores[0]
+racha_loc, ppm_loc_5 = calcular_forma_resumen(df_loc_20)
+racha_vis, ppm_vis_5 = calcular_forma_resumen(df_vis_20)
 
-# MARCADOR PRINCIPAL
+atq_l, def_l = calcular_metricas_base(id_loc, jugados)
+atq_v, def_v = calcular_metricas_base(id_vis, jugados)
+
+exp_local = max(0.2, ((atq_l * def_v) / 1.30) * 1.10)
+exp_vis = max(0.2, ((atq_v * def_l) / 1.30))
+probs = calcular_simulacion(exp_local, exp_vis)
+
+# MARCADOR SUPERIOR
 st.markdown(f"""
     <div class="scoreboard-card">
         <div style="display: flex; justify-content: space-around; align-items: center; text-align: center;">
             <div style="flex: 1;" class="crest-container">
                 <img src="{eq_loc.get('crest', '')}"/><br>
                 <h2 style="margin: 8px 0 0 0; color: #ffffff;">{local_nom}</h2>
-                <span style="color: #00ff87; font-weight: bold;">xG Est: {exp_local:.2f}</span>
+                <span style="color: #00ff87;">Forma (U5): {racha_loc}</span>
             </div>
             <div style="flex: 0.8; background: rgba(0,0,0,0.4); padding: 12px; border-radius: 12px; border: 1px solid #1e3a2f;">
-                <span style="color: #a0aec0; font-size: 0.8rem; letter-spacing: 1px;">PREDICCIÓN CENTRAL</span>
-                <h1 style="color: #ffffff; font-size: 3rem; margin: 0;">{top_m['score']}</h1>
-                <span style="color: #00ff87; font-size: 0.85rem;">Probabilidad: {top_m['prob']:.1f}%</span>
+                <span style="color: #a0aec0; font-size: 0.8rem;">PROBABILIDADES 1X2</span>
+                <h3 style="color: #ffffff; margin: 5px 0;">{probs['1']*100:.1f}% | {probs['X']*100:.1f}% | {probs['2']*100:.1f}%</h3>
+                <span style="color: #00ff87; font-size: 0.85rem;">xG: {exp_local:.2f} vs {exp_vis:.2f}</span>
             </div>
             <div style="flex: 1;" class="crest-container">
                 <img src="{eq_vis.get('crest', '')}"/><br>
                 <h2 style="margin: 8px 0 0 0; color: #ffffff;">{visitante_nom}</h2>
-                <span style="color: #00ff87; font-weight: bold;">xG Est: {exp_vis:.2f}</span>
+                <span style="color: #00ff87;">Forma (U5): {racha_vis}</span>
             </div>
         </div>
     </div>
 """, unsafe_allow_html=True)
 
-# PESTAÑAS DE ANÁLISIS
-tab_cuotas, tab_rank, tab_value = st.tabs([
-    "🎯 Cuotas Justas & Mercados", 
-    "🏆 Power Ranking Liga", 
-    "💰 Calculadora +EV"
+# -----------------------------------------------------------------------------
+# 7. PESTAÑAS PRINCIPALES: H2H, ÚLTIMOS 20 Y FORMA
+# -----------------------------------------------------------------------------
+tab_h2h, tab_form, tab_odds = st.tabs([
+    "⚔️ Enfrentamientos H2H", 
+    "📈 ÚLTIMOS 20 PARTIDOS Y FORMA", 
+    "🎯 Cuotas Justas & +EV"
 ])
 
-with tab_cuotas:
-    st.subheader("💵 Cuotas Justas (Fair Odds)")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Gana " + local_nom, f"@{1/probs_mercados['1']:.2f}", f"Prob: {probs_mercados['1']*100:.1f}%")
-    c2.metric("Empate (X)", f"@{1/probs_mercados['X']:.2f}", f"Prob: {probs_mercados['X']*100:.1f}%")
-    c3.metric("Gana " + visitante_nom, f"@{1/probs_mercados['2']:.2f}", f"Prob: {probs_mercados['2']*100:.1f}%")
+# --- TAB 1: ENFRENTAMIENTOS CARA A CARA (H2H) ---
+with tab_h2h:
+    st.subheader(f"⚔️ Historial Cara a Cara: {local_nom} vs {visitante_nom}")
+    
+    wins_loc, draws_h2h, wins_vis, df_h2h = obtener_enfrentamientos_h2h(jugados, id_loc, id_vis)
+    
+    c_h1, c_h2, c_h3, c_h4 = st.columns(4)
+    tot_h2h = wins_loc + draws_h2h + wins_vis
+    c_h1.metric("Partidos Registrados", tot_h2h)
+    c_h2.metric(f"Victorias {local_nom}", wins_loc)
+    c_h3.metric("Empates", draws_h2h)
+    c_h4.metric(f"Victorias {visitante_nom}", wins_vis)
 
     st.divider()
-    col_m1, col_m2 = st.columns(2)
-    with col_m1:
-        st.markdown("##### Mercado Goles (Over/Under 2.5)")
-        st.write(f"• **Over 2.5 Goles:** Cuota Justa **@{1/probs_mercados['over25']:.2f}** ({probs_mercados['over25']*100:.1f}%)")
-        st.write(f"• **Under 2.5 Goles:** Cuota Justa **@{1/probs_mercados['under25']:.2f}** ({probs_mercados['under25']*100:.1f}%)")
-    with col_m2:
-        st.markdown("##### Mercado Ambos Anotan (BTTS)")
-        st.write(f"• **Ambos Anotan - SÍ:** Cuota Justa **@{1/probs_mercados['btts_si']:.2f}** ({probs_mercados['btts_si']*100:.1f}%)")
-        st.write(f"• **Ambos Anotan - NO:** Cuota Justa **@{1/probs_mercados['btts_no']:.2f}** ({probs_mercados['btts_no']*100:.1f}%)")
-
-with tab_rank:
-    st.subheader(f"📊 Power Ranking - {LIGAS[liga_sel]}")
-    with st.spinner("Calculando muestra a 2 temporadas..."):
-        df_power = generar_power_ranking(equipos, jugados)
-    if not df_power.empty:
-        st.dataframe(df_power[["Equipo", "Power Rating", "xG Ataque", "xG Defensa", "PPM"]], use_container_width=True, height=450)
-
-with tab_value:
-    st.subheader("🧮 Comparador de Cuotas de Casas de Apuestas")
-    col_v1, col_v2, col_v3 = st.columns(3)
-    with col_v1:
-        mercado_sel = st.selectbox("Mercado", ["1 (Local)", "X (Empate)", "2 (Visitante)", "Over 2.5", "Under 2.5", "BTTS Sí", "BTTS No"])
-        mapa_prob = {
-            "1 (Local)": probs_mercados['1'], "X (Empate)": probs_mercados['X'], "2 (Visitante)": probs_mercados['2'],
-            "Over 2.5": probs_mercados['over25'], "Under 2.5": probs_mercados['under25'],
-            "BTTS Sí": probs_mercados['btts_si'], "BTTS No": probs_mercados['btts_no']
-        }
-        p_est = mapa_prob[mercado_sel]
-    with col_v2:
-        cuota_bookie = st.number_input("Cuota de la Casa", min_value=1.01, value=round(1/p_est * 1.08, 2), step=0.05)
-    with col_v3:
-        banca = st.number_input("Banca Total (€)", min_value=10.0, value=1000.0, step=50.0)
-
-    ev_val = (p_est * cuota_bookie) - 1.0
-    cuota_corte = 1 / p_est
-
-    st.divider()
-    if ev_val > 0:
-        st.success(f"🔥 **VALOR DETECTADO (+EV): +{ev_val*100:.2f}%**\n\nCuota mínima rentable: **@{cuota_corte:.2f}**")
+    if not df_h2h.empty:
+        st.markdown("##### Detalle de Enfrentamientos Directos Recientes")
+        st.dataframe(df_h2h, use_container_width=True, hide_index=True)
     else:
-        st.error(f"❌ **SIN VALOR (EV Negativo): {ev_val*100:.2f}%**\n\nRequiere cuota mayor a **@{cuota_corte:.2f}**.")
+        st.info("No se registraron enfrentamientos directos entre ambos equipos en las últimas 2 temporadas.")
+
+# --- TAB 2: ÚLTIMOS 20 PARTIDOS Y FORMA ACTUAL ---
+with tab_form:
+    st.subheader("📊 Análisis de Forma Reciente y Registro de 20 Partidos")
+    
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        st.markdown(f"### 🏠 {local_nom}")
+        st.write(f"**Racha Reciente (Últimos 5):** {racha_loc}")
+        st.write(f"**Promedio Puntos (U5):** `{ppm_loc_5:.2f} pts/partido`")
+        st.markdown("##### Historial (Últimos 20 encuentros)")
+        if not df_loc_20.empty:
+            st.dataframe(
+                df_loc_20[["Fecha", "Condición", "Rival", "Resultado", "Estado"]], 
+                use_container_width=True, 
+                hide_index=True,
+                height=400
+            )
+
+    with col_f2:
+        st.markdown(f"### ✈️ {visitante_nom}")
+        st.write(f"**Racha Reciente (Últimos 5):** {racha_vis}")
+        st.write(f"**Promedio Puntos (U5):** `{ppm_vis_5:.2f} pts/partido`")
+        st.markdown("##### Historial (Últimos 20 encuentros)")
+        if not df_vis_20.empty:
+            st.dataframe(
+                df_vis_20[["Fecha", "Condición", "Rival", "Resultado", "Estado"]], 
+                use_container_width=True, 
+                hide_index=True,
+                height=400
+            )
+
+# --- TAB 3: CUOTAS JUSTAS Y +EV ---
+with tab_odds:
+    st.subheader("💵 Matriz de Cuotas Justas Estimadas")
+    col_o1, col_o2, col_o3 = st.columns(3)
+    col_o1.metric(f"Victoria {local_nom}", f"@{1/probs['1']:.2f}", f"{probs['1']*100:.1f}%")
+    col_o2.metric("Empate", f"@{1/probs['X']:.2f}", f"{probs['X']*100:.1f}%")
+    col_o3.metric(f"Victoria {visitante_nom}", f"@{1/probs['2']:.2f}", f"{probs['2']*100:.1f}%")
