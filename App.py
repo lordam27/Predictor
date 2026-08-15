@@ -228,24 +228,36 @@ def ejecucion_monte_carlo(exp_loc, exp_vis, n_sims=10000):
     return goleada_loc, goleada_vis, ht_1, ht_x, ht_2
 
 # -----------------------------------------------------------------------------
-# 4. VISTA DE EVENTOS Y SELECCIÓN
+# 4. CONTROLES Y SELECCIÓN DE ENFRENTAMIENTO
 # -----------------------------------------------------------------------------
-st.title("⚽ Football Analytics Engine")
+st.title("⚽ Football Quant Analytics Pro")
+
+st.sidebar.header("⚙️ Modo de Selección")
+modo_sel = st.sidebar.radio("¿Qué deseas analizar?", ["📅 Partidos de Hoy", "🛠️ Selección Manual (Liga/Equipos)"])
 
 partidos_hoy = obtener_partidos_hoy_ordenados()
 
-with st.expander("📅 **PARTIDOS DEL DÍA (SELECCIÓN RÁPIDA)**", expanded=True):
+local_nom, visitante_nom = None, None
+eq_loc, eq_vis = None, None
+liga_sel = "PD"
+
+if modo_sel == "📅 Partidos de Hoy":
     if partidos_hoy:
         opciones_map = {
             f"[{m.get('competition',{}).get('code','-')}] {formatear_fecha(m.get('utcDate'))} | {m['homeTeam']['name']} vs {m['awayTeam']['name']}": m 
             for m in partidos_hoy
         }
-        partido_sel_key = st.selectbox("👉 Selecciona un partido de hoy:", options=list(opciones_map.keys()), index=0)
+        partido_sel_key = st.selectbox("👉 Selecciona el partido a analizar:", options=list(opciones_map.keys()), index=0)
         partido_obj = opciones_map[partido_sel_key]
-        st.session_state["liga_auto"] = partido_obj.get("competition", {}).get("code", "PD")
-        st.session_state["loc_auto"] = partido_obj["homeTeam"]["name"]
-        st.session_state["vis_auto"] = partido_obj["awayTeam"]["name"]
+        
+        liga_sel = partido_obj.get("competition", {}).get("code", "PD")
+        eq_loc = {"id": partido_obj["homeTeam"]["id"], "nombre": partido_obj["homeTeam"]["name"], "crest": partido_obj["homeTeam"].get("crest", "")}
+        eq_vis = {"id": partido_obj["awayTeam"]["id"], "nombre": partido_obj["awayTeam"]["name"], "crest": partido_obj["awayTeam"].get("crest", "")}
+        
+        local_nom = eq_loc["nombre"]
+        visitante_nom = eq_vis["nombre"]
 
+        # Cartas visuales de partidos destacados
         cols = st.columns(min(5, len(partidos_hoy)))
         for idx, m in enumerate(partidos_hoy[:5]):
             with cols[idx]:
@@ -255,38 +267,37 @@ with st.expander("📅 **PARTIDOS DEL DÍA (SELECCIÓN RÁPIDA)**", expanded=Tru
                     <strong>{m['homeTeam']['name']}</strong><br>vs<br><strong>{m['awayTeam']['name']}</strong>
                 </div>
                 """, unsafe_allow_html=True)
+    else:
+        st.warning("No se encontraron partidos programados para hoy en las ligas monitorizadas. Cambia a 'Selección Manual'.")
+        modo_sel = "🛠️ Selección Manual (Liga/Equipos)"
+
+if modo_sel.startswith("🛠️"):
+    liga_sel = st.sidebar.selectbox("Competición", list(LIGAS.keys()), format_func=lambda x: LIGAS[x])
+    equipos = obtener_equipos(liga_sel)
+    if not equipos:
+        st.error("Error al cargar equipos de la liga seleccionada.")
+        st.stop()
+
+    equipos_dict = {e["nombre"]: e for e in equipos}
+    nombres_eq = list(equipos_dict.keys())
+
+    col_s1, col_s2 = st.sidebar.columns(2)
+    with col_s1:
+        local_nom = st.selectbox("Equipo Local", nombres_eq, index=0)
+    with col_s2:
+        opciones_vis = [e for e in nombres_eq if e != local_nom]
+        visitante_nom = st.selectbox("Equipo Visitante", opciones_vis, index=0)
+
+    eq_loc = equipos_dict[local_nom]
+    eq_vis = equipos_dict[visitante_nom]
+
+filtro_condicion = st.sidebar.radio("Filtro de Historial", ["Global (Todos)", "Condición Específica (Casa/Fuera)"])
 
 st.divider()
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES Y PROCESAMIENTO
+# 5. PROCESAMIENTO Y CÁLCULOS DINOAMICOS
 # -----------------------------------------------------------------------------
-st.sidebar.header("⚙️ Selector & Filtros")
-liga_default = st.session_state.get("liga_auto", "PD")
-liga_keys = list(LIGAS.keys())
-idx_liga = liga_keys.index(liga_default) if liga_default in liga_keys else 0
-
-liga_sel = st.sidebar.selectbox("Competición", liga_keys, index=idx_liga, format_func=lambda x: LIGAS[x])
-equipos = obtener_equipos(liga_sel)
-if not equipos:
-    st.error("Error al cargar equipos.")
-    st.stop()
-
-equipos_dict = {e["nombre"]: e for e in equipos}
-nombres_eq = list(equipos_dict.keys())
-
-loc_def = st.session_state.get("loc_auto", nombres_eq[0])
-vis_def = st.session_state.get("vis_auto", nombres_eq[1] if len(nombres_eq) > 1 else nombres_eq[0])
-
-loc_idx = nombres_eq.index(loc_def) if loc_def in nombres_eq else 0
-vis_idx = nombres_eq.index(vis_def) if vis_def in nombres_eq else (1 if len(nombres_eq) > 1 else 0)
-
-local_nom = st.sidebar.selectbox("Equipo Local", nombres_eq, index=loc_idx)
-visitante_nom = st.sidebar.selectbox("Equipo Visitante", [e for e in nombres_eq if e != local_nom], index=0 if loc_idx != 0 else vis_idx)
-
-filtro_condicion = st.sidebar.radio("Filtro de Historial", ["Global (Todos)", "Condición Específica (Casa/Fuera)"])
-
-eq_loc, eq_vis = equipos_dict[local_nom], equipos_dict[visitante_nom]
 jugados = obtener_historico_dos_anios(liga_sel)
 
 cond_loc = "Local" if filtro_condicion.startswith("Condición") else None
@@ -301,7 +312,15 @@ pr_vis = calcular_power_rating(df_vis_20)
 html_racha_loc = generar_html_racha(df_loc_20)
 html_racha_vis = generar_html_racha(df_vis_20)
 
-exp_local, exp_vis = 1.45, 1.10
+# CÁLCULO DINÁMICO DE GOLES ESPERADOS (xG) BASADO EN PROMEDIOS
+gf_loc_avg = df_loc_20["GF"].mean() if not df_loc_20.empty else 1.40
+gc_loc_avg = df_loc_20["GC"].mean() if not df_loc_20.empty else 1.10
+gf_vis_avg = df_vis_20["GF"].mean() if not df_vis_20.empty else 1.10
+gc_vis_avg = df_vis_20["GC"].mean() if not df_vis_20.empty else 1.40
+
+exp_local = max(0.2, (gf_loc_avg + gc_vis_avg) / 2.0)
+exp_vis = max(0.2, (gf_vis_avg + gc_loc_avg) / 2.0)
+
 prob_1, prob_x, prob_2, df_top_m, df_ou, df_btts = calcular_matrices_completas(exp_local, exp_vis)
 
 # TABLERO DE MARCADOR
@@ -309,7 +328,7 @@ st.markdown(f"""
 <div class="scoreboard">
     <div style="display:flex; justify-content:space-around; align-items:center;">
         <div style="flex:1;">
-            <img src="{eq_loc['crest']}" height="60"><br>
+            {"<img src='" + eq_loc['crest'] + "' height='60'><br>" if eq_loc.get('crest') else ""}
             <h2 style="margin:4px 0; color:white;">{local_nom}</h2>
             <span class="power-badge">Power Rating: {pr_loc}</span><br><br>
             <div>{html_racha_loc}</div>
@@ -320,7 +339,7 @@ st.markdown(f"""
             <small>xG Estimado: {exp_local:.2f} - {exp_vis:.2f}</small>
         </div>
         <div style="flex:1;">
-            <img src="{eq_vis['crest']}" height="60"><br>
+            {"<img src='" + eq_vis['crest'] + "' height='60'><br>" if eq_vis.get('crest') else ""}
             <h2 style="margin:4px 0; color:white;">{visitante_nom}</h2>
             <span class="power-badge">Power Rating: {pr_vis}</span><br><br>
             <div>{html_racha_vis}</div>
@@ -330,7 +349,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 6. PESTAÑAS AMPLIADAS
+# 6. PESTAÑAS DE ANÁLISIS
 # -----------------------------------------------------------------------------
 tab_marcad, tab_btts_ou, tab_value, tab_montecarlo, tab_form = st.tabs([
     "🎯 Marcador & 1X2", 
@@ -433,4 +452,3 @@ with tab_form:
         st.markdown(f"### ✈️ {visitante_nom}")
         st.markdown(f"**Power Rating:** `{pr_vis}/100` | **Racha:** {html_racha_vis}", unsafe_allow_html=True)
         st.dataframe(df_vis_20[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), use_container_width=True, hide_index=True, height=350)
-        
