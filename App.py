@@ -440,7 +440,13 @@ gc_vis_avg = df_vis_hist["GC"].head(20).mean() if not df_vis_hist.empty else 1.4
 exp_local = max(0.2, (gf_loc_avg + gc_vis_avg) / 2.0)
 exp_vis = max(0.2, (gf_vis_avg + gc_loc_avg) / 2.0)
 
-prob_1, prob_x, prob_2, df_top_m, df_ou, df_btts = calcular_matrices_completas(exp_local, exp_vis)
+try:
+    prob_1, prob_x, prob_2, df_top_m, df_ou, df_btts = calcular_matrices_completas(exp_local, exp_vis)
+except Exception as e:
+    st.error("❌ Error calculando marcadores/mercados (Over-Under, BTTS, marcador exacto). Detalle del fallo:")
+    st.exception(e)
+    st.stop()
+
 stats_esp = estimar_corners_y_tiros(exp_local, exp_vis, pr_loc, pr_vis)
 
 st.markdown(f"""
@@ -460,11 +466,4 @@ st.markdown(f"""
         <div style="flex:1;">
             {"<img src='" + eq_vis.crest + "' height='65'><br>" if eq_vis.crest else ""}
             <h2 style="margin:6px 0; color:white;">{visitante_nom}</h2>
-            <span class="power-badge">Power Rank: {pr_vis} / 100</span><br><br>
-            <div>{html_racha_vis}</div>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# -------------------------------------------------------
+            <span class="power-badge">Power Rank: {pr_vis} / 1
