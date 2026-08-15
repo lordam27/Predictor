@@ -7,47 +7,66 @@ import pandas as pd
 import streamlit as st
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN E INTERFAZ
+# 1. CONFIGURACIÓN E INTERFAZ MODERNA Y DINÁMICA
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Football Quant Pro | Power Ranking & Advanced Analytics",
+    page_title="Football Quant Pro | Analytics & Predictions",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# Estilos CSS avanzados (Glassmorphism + Neon accents)
 st.markdown("""
     <style>
+    /* Fondo principal y textos */
     .stApp { background-color: #0b1319; color: #e2e8f0; }
     [data-testid="stSidebar"] { background-color: #111c24; border-right: 1px solid #1e2d3d; }
+    
+    /* Tarjeta de partido rápido */
     .match-card {
-        background: #16222f; border: 1px solid #233547;
-        border-radius: 8px; padding: 10px 14px; margin-bottom: 8px;
+        background: linear-gradient(145deg, #16222f, #111a24);
+        border: 1px solid #233547;
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        transition: transform 0.2s ease, border-color 0.2s ease;
     }
+    .match-card:hover {
+        transform: translateY(-2px);
+        border-color: #00e5ff;
+    }
+
+    /* Badges de Rachas y Power Ranking */
     .badge-v { background-color: #10B981; color: white; font-weight: bold; padding: 2px 7px; border-radius: 4px; font-size: 0.8rem; }
     .badge-e { background-color: #F59E0B; color: white; font-weight: bold; padding: 2px 7px; border-radius: 4px; font-size: 0.8rem; }
     .badge-d { background-color: #EF4444; color: white; font-weight: bold; padding: 2px 7px; border-radius: 4px; font-size: 0.8rem; }
     
     .power-badge {
         background: linear-gradient(135deg, #00e5ff 0%, #0077ff 100%);
-        color: #0b1319; font-weight: 800; padding: 4px 10px; border-radius: 12px; font-size: 0.85rem;
+        color: #0b1319; font-weight: 800; padding: 4px 12px; border-radius: 12px; font-size: 0.85rem;
+        display: inline-block;
     }
 
+    /* Marcador Principal */
     .scoreboard {
         background: linear-gradient(135deg, #162636 0%, #0d1722 100%);
-        border: 1px solid #00e5ff; border-radius: 12px;
-        padding: 18px; text-align: center; margin-bottom: 20px;
+        border: 1px solid #00e5ff; border-radius: 16px;
+        padding: 24px; text-align: center; margin-bottom: 25px;
+        box-shadow: 0 0 15px rgba(0, 229, 255, 0.15);
     }
-    
+
+    /* Cajas destacadas de Combinada / Proyecciones */
     .parlay-box {
-        background: #112233; border: 2px dashed #00e5ff; border-radius: 10px;
-        padding: 15px; margin-top: 10px;
+        background: #112233; border: 2px dashed #00e5ff; border-radius: 12px;
+        padding: 18px; margin-top: 15px;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONEXIÓN API & CARGA DE DATOS
+# 2. CONEXIÓN API & CARGA DE DATOS (ORDENADOS POR LIGA Y HORA)
 # -----------------------------------------------------------------------------
 try:
     API_KEY = st.secrets["FOOTBALL_API_KEY"]
@@ -85,7 +104,9 @@ def obtener_partidos_hoy_ordenados():
             matches = res.json().get("matches", [])
             codigos = set(LIGAS.keys())
             filtrados = [m for m in matches if m.get("competition", {}).get("code") in codigos]
-            return sorted(filtrados, key=lambda x: x.get("utcDate", ""))
+            
+            # ORDENACIÓN: Primero por Código de Liga, segundo por Fecha/Hora de inicio
+            return sorted(filtrados, key=lambda x: (x.get("competition", {}).get("code", ""), x.get("utcDate", "")))
     except:
         pass
     return []
@@ -221,22 +242,18 @@ def calcular_matrices_completas(exp_loc, exp_vis):
 def estimar_corners_y_tiros(exp_loc_goles, exp_vis_goles, pr_loc, pr_vis):
     corners_loc = max(2.5, (exp_loc_goles * 2.2) + (pr_loc / 25))
     corners_vis = max(1.5, (exp_vis_goles * 1.8) + (pr_vis / 30))
-    corners_tot = corners_loc + corners_vis
-
+    
     tiros_loc = max(6.0, (exp_loc_goles * 4.8) + (pr_loc / 10))
     tiros_vis = max(4.0, (exp_vis_goles * 4.2) + (pr_vis / 12))
     
-    tiros_puerta_loc = tiros_loc * 0.35
-    tiros_puerta_vis = tiros_vis * 0.32
-
     return {
         "corners_loc": round(corners_loc, 1),
         "corners_vis": round(corners_vis, 1),
-        "corners_tot": round(corners_tot, 1),
+        "corners_tot": round(corners_loc + corners_vis, 1),
         "tiros_loc": round(tiros_loc, 1),
         "tiros_vis": round(tiros_vis, 1),
-        "tiros_puerta_loc": round(tiros_puerta_loc, 1),
-        "tiros_puerta_vis": round(tiros_puerta_vis, 1)
+        "tiros_puerta_loc": round(tiros_loc * 0.35, 1),
+        "tiros_puerta_vis": round(tiros_vis * 0.32, 1)
     }
 
 # -----------------------------------------------------------------------------
@@ -244,8 +261,8 @@ def estimar_corners_y_tiros(exp_loc_goles, exp_vis_goles, pr_loc, pr_vis):
 # -----------------------------------------------------------------------------
 st.title("⚽ Football Quant Analytics Pro")
 
-st.sidebar.header("⚙️ Modo de Selección")
-modo_sel = st.sidebar.radio("¿Qué deseas analizar?", ["📅 Partidos de Hoy", "🛠️ Selección Manual (Liga/Equipos)"])
+st.sidebar.header("⚙️ Configuración & Partidos")
+modo_sel = st.sidebar.radio("¿Qué deseas analizar?", ["📅 Partidos de Hoy", "🛠️ Selección Manual"])
 
 partidos_hoy = obtener_partidos_hoy_ordenados()
 
@@ -255,11 +272,12 @@ liga_sel = "PD"
 
 if modo_sel == "📅 Partidos de Hoy":
     if partidos_hoy:
+        # Formato agrupado para el selector
         opciones_map = {
-            f"[{m.get('competition',{}).get('code','-')}] {formatear_fecha(m.get('utcDate'))} | {m['homeTeam']['name']} vs {m['awayTeam']['name']}": m 
+            f"{LIGAS.get(m.get('competition',{}).get('code'), 'OTRA')} | {formatear_fecha(m.get('utcDate'))} ➔ {m['homeTeam']['name']} vs {m['awayTeam']['name']}": m 
             for m in partidos_hoy
         }
-        partido_sel_key = st.selectbox("👉 Selecciona el partido a analizar:", options=list(opciones_map.keys()), index=0)
+        partido_sel_key = st.selectbox("👉 Partido a Analizar (Ordenado por Liga y Hora):", options=list(opciones_map.keys()), index=0)
         partido_obj = opciones_map[partido_sel_key]
         
         liga_sel = partido_obj.get("competition", {}).get("code", "PD")
@@ -269,24 +287,28 @@ if modo_sel == "📅 Partidos de Hoy":
         local_nom = eq_loc["nombre"]
         visitante_nom = eq_vis["nombre"]
 
+        # Vistazo rápido en tarjetas superiores
+        st.write("##### 🕒 Próximos Encuentros Destacados")
         cols = st.columns(min(5, len(partidos_hoy)))
         for idx, m in enumerate(partidos_hoy[:5]):
             with cols[idx]:
+                code_liga = m.get('competition',{}).get('code','')
                 st.markdown(f"""
                 <div class="match-card">
-                    <small style="color:#00e5ff;">{formatear_fecha(m.get('utcDate'))}</small><br>
-                    <strong>{m['homeTeam']['name']}</strong><br>vs<br><strong>{m['awayTeam']['name']}</strong>
+                    <small style="color:#00e5ff; font-weight:bold;">{LIGAS.get(code_liga, code_liga)}</small><br>
+                    <small style="color:#94a3b8;">{formatear_fecha(m.get('utcDate'))}</small><br>
+                    <strong style="color:#fff;">{m['homeTeam']['name']}</strong><br>vs<br><strong style="color:#fff;">{m['awayTeam']['name']}</strong>
                 </div>
                 """, unsafe_allow_html=True)
     else:
-        st.warning("No se encontraron partidos programados para hoy. Cambiando a selección manual.")
-        modo_sel = "🛠️ Selección Manual (Liga/Equipos)"
+        st.warning("No se encontraron partidos programados para hoy. Pasando a Selección Manual.")
+        modo_sel = "🛠️ Selección Manual"
 
 if modo_sel.startswith("🛠️"):
     liga_sel = st.sidebar.selectbox("Competición", list(LIGAS.keys()), format_func=lambda x: LIGAS[x])
     equipos = obtener_equipos(liga_sel)
     if not equipos:
-        st.error("Error al cargar equipos de la liga seleccionada.")
+        st.error("Error al cargar los equipos de la liga.")
         st.stop()
 
     equipos_dict = {e["nombre"]: e for e in equipos}
@@ -302,12 +324,11 @@ if modo_sel.startswith("🛠️"):
     eq_loc = equipos_dict[local_nom]
     eq_vis = equipos_dict[visitante_nom]
 
-filtro_condicion = st.sidebar.radio("Filtro de Historial", ["Global (Todos)", "Condición Específica (Casa/Fuera)"])
-
+filtro_condicion = st.sidebar.radio("Filtro del Histórico", ["Global (Todos)", "Condición Específica (Casa/Fuera)"])
 st.divider()
 
 # -----------------------------------------------------------------------------
-# 5. PROCESAMIENTO Y CÁLCULOS DINÁMICOS
+# 5. CÁLCULOS DINÁMICOS Y PANEL PRINCIPAL
 # -----------------------------------------------------------------------------
 jugados = obtener_historico_dos_anios(liga_sel)
 
@@ -334,25 +355,25 @@ exp_vis = max(0.2, (gf_vis_avg + gc_loc_avg) / 2.0)
 prob_1, prob_x, prob_2, df_top_m, df_ou, df_btts = calcular_matrices_completas(exp_local, exp_vis)
 stats_esp = estimar_corners_y_tiros(exp_local, exp_vis, pr_loc, pr_vis)
 
-# TABLERO PRINCIPAL
+# MARCADOR DINÁMICO
 st.markdown(f"""
 <div class="scoreboard">
     <div style="display:flex; justify-content:space-around; align-items:center;">
         <div style="flex:1;">
-            {"<img src='" + eq_loc['crest'] + "' height='60'><br>" if eq_loc.get('crest') else ""}
-            <h2 style="margin:4px 0; color:white;">{local_nom}</h2>
-            <span class="power-badge">Power Ranking 2 Años: {pr_loc} / 100</span><br><br>
+            {"<img src='" + eq_loc['crest'] + "' height='65'><br>" if eq_loc.get('crest') else ""}
+            <h2 style="margin:6px 0; color:white;">{local_nom}</h2>
+            <span class="power-badge">Power Rank: {pr_loc} / 100</span><br><br>
             <div>{html_racha_loc}</div>
         </div>
-        <div style="flex:1; background:rgba(0,0,0,0.3); padding:15px; border-radius:10px; border:1px solid #1e2d3d;">
-            <span style="color:#00e5ff; font-weight:bold;">PROBABILIDADES 1X2</span>
-            <h2 style="color:white; margin:8px 0;">{prob_1*100:.1f}% | {prob_x*100:.1f}% | {prob_2*100:.1f}%</h2>
-            <small>xG Estimado: {exp_local:.2f} - {exp_vis:.2f}</small>
+        <div style="flex:1; background:rgba(0,0,0,0.35); padding:18px; border-radius:12px; border:1px solid #1e2d3d;">
+            <span style="color:#00e5ff; font-weight:bold; letter-spacing:1px;">PROBABILIDADES 1X2</span>
+            <h1 style="color:white; margin:10px 0; font-size: 2.2rem;">{prob_1*100:.1f}% | {prob_x*100:.1f}% | {prob_2*100:.1f}%</h1>
+            <small style="color:#94a3b8;">xG Estimado: <strong>{exp_local:.2f} - {exp_vis:.2f}</strong></small>
         </div>
         <div style="flex:1;">
-            {"<img src='" + eq_vis['crest'] + "' height='60'><br>" if eq_vis.get('crest') else ""}
-            <h2 style="margin:4px 0; color:white;">{visitante_nom}</h2>
-            <span class="power-badge">Power Ranking 2 Años: {pr_vis} / 100</span><br><br>
+            {"<img src='" + eq_vis['crest'] + "' height='65'><br>" if eq_vis.get('crest') else ""}
+            <h2 style="margin:6px 0; color:white;">{visitante_nom}</h2>
+            <span class="power-badge">Power Rank: {pr_vis} / 100</span><br><br>
             <div>{html_racha_vis}</div>
         </div>
     </div>
@@ -360,11 +381,11 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 6. PESTAÑAS DE ANÁLISIS COMPLETO
+# 6. PESTAÑAS
 # -----------------------------------------------------------------------------
 tab_marcad, tab_corners_tiros, tab_combinada, tab_btts_ou, tab_value, tab_form = st.tabs([
     "🎯 Marcador & 1X2", 
-    "🚩 Córneres y Tiros Esperados",
+    "🚩 Córneres y Tiros",
     "🎟️ Predicción Combinada (+EV)",
     "⚽ Goles & BTTS",
     "🧮 Calculadora Kelly",
@@ -387,26 +408,26 @@ with tab_corners_tiros:
     col_c1, col_c2, col_c3 = st.columns(3)
     
     with col_c1:
-        st.markdown("### 🚩 Córneres Esperados")
+        st.markdown("### 🚩 Córneres")
         st.metric(f"Córneres {local_nom}", f"{stats_esp['corners_loc']}")
         st.metric(f"Córneres {visitante_nom}", f"{stats_esp['corners_vis']}")
-        st.metric("TOTAL CÓRNERES PARTIDO", f"{stats_esp['corners_tot']}", delta="Línea sugerida: Over 9.5" if stats_esp['corners_tot'] > 9.5 else "Línea sugerida: Under 9.5")
+        st.metric("TOTAL CÓRNERES", f"{stats_esp['corners_tot']}", delta="Línea sug: Over 9.5" if stats_esp['corners_tot'] > 9.5 else "Línea sug: Under 9.5")
 
     with col_c2:
-        st.markdown("### 🎯 Tiros Totales Esperados")
+        st.markdown("### 🎯 Tiros Totales")
         st.metric(f"Tiros {local_nom}", f"{stats_esp['tiros_loc']}")
         st.metric(f"Tiros {visitante_nom}", f"{stats_esp['tiros_vis']}")
-        st.metric("TOTAL TIROS PARTIDO", f"{round(stats_esp['tiros_loc'] + stats_esp['tiros_vis'], 1)}")
+        st.metric("TOTAL TIROS", f"{round(stats_esp['tiros_loc'] + stats_esp['tiros_vis'], 1)}")
 
     with col_c3:
-        st.markdown("### 🧤 Tiros a Puerta Esperados")
+        st.markdown("### 🧤 Tiros a Puerta")
         st.metric(f"A Puerta {local_nom}", f"{stats_esp['tiros_puerta_loc']}")
         st.metric(f"A Puerta {visitante_nom}", f"{stats_esp['tiros_puerta_vis']}")
-        st.metric("TOTAL A PUERTA PARTIDO", f"{round(stats_esp['tiros_puerta_loc'] + stats_esp['tiros_puerta_vis'], 1)}")
+        st.metric("TOTAL A PUERTA", f"{round(stats_esp['tiros_puerta_loc'] + stats_esp['tiros_puerta_vis'], 1)}")
 
 with tab_combinada:
-    st.subheader("🎟️ Predicción de Combinada Algorítmica (3 Partidos)")
-    st.write("Apuesta combinada calculada automáticamente seleccionando elecciones con cuota justa ventajosa y suma de cuotas entre **2.50 y 6.50**.")
+    st.subheader("🎟️ Predicción Combinada Algorítmica")
+    st.write("Combinada de 3 elecciones calculada con algoritmo de cuota objetivo (**2.50 - 6.50**).")
 
     def generar_combinada_optima():
         partidos_usar = partidos_hoy if len(partidos_hoy) >= 3 else [
@@ -418,7 +439,7 @@ with tab_combinada:
         picks = []
         cuota_acumulada = 1.0
         
-        # Pick 1 (Del partido actual)
+        # Pick 1
         p1_cuota = min(2.10, max(1.35, 1/prob_1 if prob_1 > 0.40 else 1/prob_x))
         p1_tipo = f"{local_nom} Gana o Empata" if prob_1 > 0.40 else "Over 1.5 Goles"
         picks.append({
@@ -439,7 +460,7 @@ with tab_combinada:
         })
         cuota_acumulada *= p2_cuota
 
-        # Pick 3 (Sintetizado para asegurar cuota objetivo entre 2.50 y 6.50)
+        # Pick 3
         p3_cuota = max(1.30, min(2.20, 3.80 / cuota_acumulada))
         picks.append({
             "Partido": f"{partidos_usar[2]['homeTeam']['name']} vs {partidos_usar[2]['awayTeam']['name']}",
@@ -458,7 +479,7 @@ with tab_combinada:
     st.markdown(f"""
     <div class="parlay-box">
         <h3 style="color:#00e5ff; margin:0;">🔥 Cuota Conjunta Final: @{cuota_total}</h3>
-        <p style="margin:5px 0 0 0; color:#e2e8f0;">Cumple el rango objetivo establecido (Entre 2.50 y 6.50). Probabilidad conjunta implícita: <strong>{round((1/cuota_total)*100, 1)}%</strong></p>
+        <p style="margin:5px 0 0 0; color:#e2e8f0;">Probabilidad conjunta estimada: <strong>{round((1/cuota_total)*100, 1)}%</strong></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -472,11 +493,11 @@ with tab_btts_ou:
         st.dataframe(df_ou, use_container_width=True, hide_index=True)
 
 with tab_value:
-    st.subheader("🧮 Calculadora de Value Bets y Criterio de Kelly")
+    st.subheader("🧮 Calculadora de Stake (Criterio de Kelly)")
     col_v1, col_v2, col_v3 = st.columns(3)
     
     with col_v1:
-        sint_opcion = st.selectbox("Selecciona Selección", [f"Victoria {local_nom}", "Empate", f"Victoria {visitante_nom}"])
+        sint_opcion = st.selectbox("Selecciona Elección", [f"Victoria {local_nom}", "Empate", f"Victoria {visitante_nom}"])
         cuota_bookie = st.number_input("Cuota de la Casa de Apuestas", min_value=1.01, value=2.10, step=0.05)
         bankroll = st.number_input("Tu Bankroll Total (€)", min_value=10.0, value=1000.0, step=50.0)
     
@@ -498,7 +519,7 @@ with tab_value:
             st.error(f"❌ SIN VALOR (+EV: {ev*100:.1f}%)")
 
 with tab_form:
-    st.subheader("📈 Power Ranking de las 2 Últimas Temporadas")
+    st.subheader("📈 Power Ranking & Registros Recientes")
     
     pr_col1, pr_col2 = st.columns(2)
     with pr_col1:
