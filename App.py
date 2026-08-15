@@ -443,4 +443,4 @@ with tab_combinada:
 
         # Ajuste para garantizar la cuota entre 2.50 y 6.50
         p3_cuota = max(1.30, min(2.20, 3.80 / cuota_acumulada))
-        picks.append({"Partido": partidos_usar[2]['homeTeam']['name'] + " vs " + partidos_usar[2]['awayTeam']['name'], "Pick": "Gana Local / Empate"
+        picks.append({"Partido": partidos_usar[2]['homeTeam']['name'] + " vs " + partidos_usar[2]['awayTeam']['name'], "Pick": "Gana Local / Empate"})
