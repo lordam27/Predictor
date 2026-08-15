@@ -453,7 +453,7 @@ st.markdown(f"""
 <div class="scoreboard">
     <div style="display:flex; justify-content:space-around; align-items:center;">
         <div style="flex:1;">
-            {"<img src='" + eq_loc.crest + "' height='65'><br>" if eq_loc.crest else ""}
+            {'<img src="' + eq_loc.crest + '" height="65"><br>' if eq_loc.crest else ''}
             <h2 style="margin:6px 0; color:white;">{local_nom}</h2>
             <span class="power-badge">Power Rank: {pr_loc} / 100</span><br><br>
             <div>{html_racha_loc}</div>
@@ -464,6 +464,6 @@ st.markdown(f"""
             <small style="color:#94a3b8;">xG Estimado: <strong>{exp_local:.2f} - {exp_vis:.2f}</strong></small>
         </div>
         <div style="flex:1;">
-            {"<img src='" + eq_vis.crest + "' height='65'><br>" if eq_vis.crest else ""}
+            {'<img src="' + eq_vis.crest + '" height="65"><br>' if eq_vis.crest else ''}
             <h2 style="margin:6px 0; color:white;">{visitante_nom}</h2>
             <span class="power-badge">Power Rank: {pr_vis} / 1
