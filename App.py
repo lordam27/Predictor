@@ -284,7 +284,6 @@ vis_idx = nombres_eq.index(vis_def) if vis_def in nombres_eq else (1 if len(nomb
 local_nom = st.sidebar.selectbox("Equipo Local", nombres_eq, index=loc_idx)
 visitante_nom = st.sidebar.selectbox("Equipo Visitante", [e for e in nombres_eq if e != local_nom], index=0 if loc_idx != 0 else vis_idx)
 
-# NUEVO: FILTRO LOCAL / VISITANTE
 filtro_condicion = st.sidebar.radio("Filtro de Historial", ["Global (Todos)", "Condición Específica (Casa/Fuera)"])
 
 eq_loc, eq_vis = equipos_dict[local_nom], equipos_dict[visitante_nom]
@@ -412,15 +411,16 @@ with tab_montecarlo:
 with tab_form:
     st.subheader("📈 Evolución de Puntos y Registro")
     
-    # GRÁFICO DE EVOLUCIÓN
+    # GRÁFICO DE EVOLUCIÓN (Manejo de series de diferente longitud)
     if not df_loc_20.empty and not df_vis_20.empty:
-        pts_loc_cum = df_loc_20.iloc[::-1]["Puntos"].cumsum().tolist()
-        pts_vis_cum = df_vis_20.iloc[::-1]["Puntos"].cumsum().tolist()
+        pts_loc_cum = pd.Series(df_loc_20.iloc[::-1]["Puntos"].cumsum().values)
+        pts_vis_cum = pd.Series(df_vis_20.iloc[::-1]["Puntos"].cumsum().values)
         
         df_chart = pd.DataFrame({
             f"{local_nom} (Puntos Acum.)": pts_loc_cum,
             f"{visitante_nom} (Puntos Acum.)": pts_vis_cum
-        })
+        }).ffill()
+
         st.markdown("##### Evolución de Puntos Acumulados en la Muestra")
         st.line_chart(df_chart)
 
@@ -433,3 +433,4 @@ with tab_form:
         st.markdown(f"### ✈️ {visitante_nom}")
         st.markdown(f"**Power Rating:** `{pr_vis}/100` | **Racha:** {html_racha_vis}", unsafe_allow_html=True)
         st.dataframe(df_vis_20[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), use_container_width=True, hide_index=True, height=350)
+        
