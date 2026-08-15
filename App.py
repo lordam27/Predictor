@@ -466,4 +466,158 @@ st.markdown(f"""
         <div style="flex:1;">
             {'<img src="' + eq_vis.crest + '" height="65"><br>' if eq_vis.crest else ''}
             <h2 style="margin:6px 0; color:white;">{visitante_nom}</h2>
-            <span class="power-badge">Power Rank: {pr_vis} / 1
+            <span class="power-badge">Power Rank: {pr_vis} / 100</span><br><br>
+            <div>{html_racha_vis}</div>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# 6. PESTAÑAS
+# -----------------------------------------------------------------------------
+tab_marcad, tab_corners_tiros, tab_combinada, tab_btts_ou, tab_value, tab_form = st.tabs([
+    "🎯 Marcador & 1X2",
+    "🚩 Córneres y Tiros",
+    "🎟️ Predicción Combinada (+EV)",
+    "⚽ Goles & BTTS",
+    "🧮 Calculadora Kelly",
+    "📈 Power Ranking & Historial"
+])
+
+with tab_marcad:
+    st.subheader("🎯 Marcadores Exactos Más Probables")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.dataframe(df_top_m, use_container_width=True, hide_index=True)
+    with col2:
+        st.markdown("##### Cuotas Justas Estimadas")
+        st.metric(f"Victoria {local_nom}", f"@{1/prob_1:.2f}", f"{prob_1*100:.1f}%")
+        st.metric("Empate", f"@{1/prob_x:.2f}", f"{prob_x*100:.1f}%")
+        st.metric(f"Victoria {visitante_nom}", f"@{1/prob_2:.2f}", f"{prob_2*100:.1f}%")
+
+with tab_corners_tiros:
+    st.subheader("🚩 Metriq Pro: Córneres y Tiros Esperados")
+    col_c1, col_c2, col_c3 = st.columns(3)
+    with col_c1:
+        st.markdown("### 🚩 Córneres")
+        st.metric(f"Córneres {local_nom}", f"{stats_esp['corners_loc']}")
+        st.metric(f"Córneres {visitante_nom}", f"{stats_esp['corners_vis']}")
+        st.metric("TOTAL CÓRNERES", f"{stats_esp['corners_tot']}", delta="Línea sug: Over 9.5" if stats_esp['corners_tot'] > 9.5 else "Línea sug: Under 9.5")
+    with col_c2:
+        st.markdown("### 🎯 Tiros Totales")
+        st.metric(f"Tiros {local_nom}", f"{stats_esp['tiros_loc']}")
+        st.metric(f"Tiros {visitante_nom}", f"{stats_esp['tiros_vis']}")
+        st.metric("TOTAL TIROS", f"{round(stats_esp['tiros_loc'] + stats_esp['tiros_vis'], 1)}")
+    with col_c3:
+        st.markdown("### 🧤 Tiros a Puerta")
+        st.metric(f"A Puerta {local_nom}", f"{stats_esp['tiros_puerta_loc']}")
+        st.metric(f"A Puerta {visitante_nom}", f"{stats_esp['tiros_puerta_vis']}")
+        st.metric("TOTAL A PUERTA", f"{round(stats_esp['tiros_puerta_loc'] + stats_esp['tiros_puerta_vis'], 1)}")
+
+with tab_combinada:
+    st.subheader("🎟️ Predicción Combinada Algorítmica")
+    st.write("Combinada de 3 elecciones calculada con algoritmo de cuota objetivo (**2.50 - 6.50**).")
+    st.caption("⚠️ Los partidos 2 y 3 son de ejemplo cuando no hay al menos 3 partidos disponibles hoy en las ligas cubiertas.")
+
+    def generar_combinada_optima():
+        partidos_usar = partidos_hoy if len(partidos_hoy) >= 3 else [
+            {"homeTeam": {"name": local_nom}, "awayTeam": {"name": visitante_nom}},
+            {"homeTeam": {"name": "Real Madrid"}, "awayTeam": {"name": "Getafe"}},
+            {"homeTeam": {"name": "Arsenal"}, "awayTeam": {"name": "Fulham"}}
+        ]
+        picks = []
+        cuota_acumulada = 1.0
+
+        p1_cuota = min(2.10, max(1.35, 1/prob_1 if prob_1 > 0.40 else 1/prob_x))
+        p1_tipo = f"{local_nom} Gana o Empata" if prob_1 > 0.40 else "Over 1.5 Goles"
+        picks.append({
+            "Partido": f"{local_nom} vs {visitante_nom}",
+            "Pick": p1_tipo,
+            "Cuota Justa": round(p1_cuota, 2),
+            "Probabilidad": f"{min(90.0, round((1/p1_cuota)*100, 1))}%"
+        })
+        cuota_acumulada *= p1_cuota
+
+        p2_cuota = 1.45
+        picks.append({
+            "Partido": f"{partidos_usar[1]['homeTeam']['name']} vs {partidos_usar[1]['awayTeam']['name']}",
+            "Pick": "Over 1.5 Goles",
+            "Cuota Justa": p2_cuota,
+            "Probabilidad": "69.0%"
+        })
+        cuota_acumulada *= p2_cuota
+
+        p3_cuota = max(1.30, min(2.20, 3.80 / cuota_acumulada))
+        picks.append({
+            "Partido": f"{partidos_usar[2]['homeTeam']['name']} vs {partidos_usar[2]['awayTeam']['name']}",
+            "Pick": "1X (Local o Empate)",
+            "Cuota Justa": round(p3_cuota, 2),
+            "Probabilidad": f"{round((1/p3_cuota)*100, 1)}%"
+        })
+        cuota_acumulada *= p3_cuota
+
+        return pd.DataFrame(picks), round(cuota_acumulada, 2)
+
+    df_comb, cuota_total = generar_combinada_optima()
+    st.table(df_comb)
+
+    st.markdown(f"""
+    <div class="parlay-box">
+        <h3 style="color:#00e5ff; margin:0;">🔥 Cuota Conjunta Final: @{cuota_total}</h3>
+        <p style="margin:5px 0 0 0; color:#e2e8f0;">Probabilidad conjunta estimada: <strong>{round((1/cuota_total)*100, 1)}%</strong></p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with tab_btts_ou:
+    col_b, col_o = st.columns(2)
+    with col_b:
+        st.subheader("🤝 Ambos Equipos Anotan (BTTS)")
+        st.dataframe(df_btts, use_container_width=True, hide_index=True)
+    with col_o:
+        st.subheader("⚽ Líneas Over / Under")
+        st.dataframe(df_ou, use_container_width=True, hide_index=True)
+
+with tab_value:
+    st.subheader("🧮 Calculadora de Stake (Criterio de Kelly)")
+    col_v1, col_v2, col_v3 = st.columns(3)
+
+    with col_v1:
+        sint_opcion = st.selectbox("Selecciona Elección", [f"Victoria {local_nom}", "Empate", f"Victoria {visitante_nom}"])
+        cuota_bookie = st.number_input("Cuota de la Casa de Apuestas", min_value=1.01, value=2.10, step=0.05)
+        bankroll = st.number_input("Tu Bankroll Total (€)", min_value=10.0, value=1000.0, step=50.0)
+        fraccion_kelly = st.slider("Fracción de Kelly a aplicar", 0.05, 1.0, KELLY_FRACTION_DEFAULT, 0.05,
+                                    help="Kelly completo (1.0) es más agresivo. 0.25 (1/4 Kelly) es lo habitual para reducir varianza.")
+
+    prob_estimada = prob_1 if sint_opcion.startswith("Victoria " + local_nom) else (prob_x if sint_opcion == "Empate" else prob_2)
+    ev = (prob_estimada * cuota_bookie) - 1.0
+    b = cuota_bookie - 1.0
+    f_kelly = max(0.0, (b * prob_estimada - (1.0 - prob_estimada)) / b)
+    stake_sugerido = bankroll * (f_kelly * fraccion_kelly)
+
+    with col_v2:
+        st.metric("Probabilidad Estimada", f"{prob_estimada*100:.1f}%")
+        st.metric("Cuota Justa Calculada", f"@{1/prob_estimada:.2f}")
+
+    with col_v3:
+        if ev > 0:
+            st.success(f"✅ ¡APUESTA CON VALOR POSITIVO! (+EV: {ev*100:.1f}%)")
+            st.metric(f"Stake Recomendado ({fraccion_kelly:.0%} Kelly)", f"{stake_sugerido:.2f} €")
+        else:
+            st.error(f"❌ SIN VALOR (+EV: {ev*100:.1f}%)")
+
+with tab_form:
+    st.subheader("📈 Power Ranking & Registros Recientes")
+    pr_col1, pr_col2 = st.columns(2)
+    with pr_col1:
+        st.metric(f"Rating {local_nom}", f"{pr_loc} / 100")
+    with pr_col2:
+        st.metric(f"Rating {visitante_nom}", f"{pr_vis} / 100")
+
+    f_col1, f_col2 = st.columns(2)
+    with f_col1:
+        st.markdown(f"### 🏠 Histórico: {local_nom}")
+        st.dataframe(df_loc_hist[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), use_container_width=True, hide_index=True, height=350)
+    with f_col2:
+        st.markdown(f"### ✈️ Histórico: {visitante_nom}")
+        st.dataframe(df_vis_hist[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), use_container_width=True, hide_index=True, height=350)
