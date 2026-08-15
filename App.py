@@ -2,14 +2,15 @@ import math
 import time
 import datetime
 import requests
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN E INTERFAZ LIMPIA
+# 1. CONFIGURACIÓN E INTERFAZ
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Football Quant Pro",
+    page_title="Football Quant Pro | Advanced Analytics",
     page_icon="⚽",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -17,38 +18,31 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    .stApp {
-        background-color: #0b1319;
-        color: #e2e8f0;
-    }
-    [data-testid="stSidebar"] {
-        background-color: #111c24;
-        border-right: 1px solid #1e2d3d;
-    }
+    .stApp { background-color: #0b1319; color: #e2e8f0; }
+    [data-testid="stSidebar"] { background-color: #111c24; border-right: 1px solid #1e2d3d; }
     .match-card {
-        background: #16222f;
-        border: 1px solid #233547;
-        border-radius: 8px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
+        background: #16222f; border: 1px solid #233547;
+        border-radius: 8px; padding: 10px 14px; margin-bottom: 8px;
     }
-    .badge-v { background-color: #10B981; color: white; font-weight: bold; padding: 3px 8px; border-radius: 4px; font-size: 0.85rem; }
-    .badge-e { background-color: #F59E0B; color: white; font-weight: bold; padding: 3px 8px; border-radius: 4px; font-size: 0.85rem; }
-    .badge-d { background-color: #EF4444; color: white; font-weight: bold; padding: 3px 8px; border-radius: 4px; font-size: 0.85rem; }
+    .badge-v { background-color: #10B981; color: white; font-weight: bold; padding: 2px 7px; border-radius: 4px; font-size: 0.8rem; }
+    .badge-e { background-color: #F59E0B; color: white; font-weight: bold; padding: 2px 7px; border-radius: 4px; font-size: 0.8rem; }
+    .badge-d { background-color: #EF4444; color: white; font-weight: bold; padding: 2px 7px; border-radius: 4px; font-size: 0.8rem; }
     
+    .power-badge {
+        background: linear-gradient(135deg, #00e5ff 0%, #0077ff 100%);
+        color: #0b1319; font-weight: 800; padding: 4px 10px; border-radius: 12px; font-size: 0.85rem;
+    }
+
     .scoreboard {
         background: linear-gradient(135deg, #162636 0%, #0d1722 100%);
-        border: 1px solid #00e5ff;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-        margin-bottom: 20px;
+        border: 1px solid #00e5ff; border-radius: 12px;
+        padding: 18px; text-align: center; margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. CONEXIÓN Y DATOS
+# 2. CONEXIÓN API & CARGA DE DATOS
 # -----------------------------------------------------------------------------
 try:
     API_KEY = st.secrets["FOOTBALL_API_KEY"]
@@ -67,7 +61,6 @@ LIGAS = {
 }
 
 def formatear_fecha(iso_str):
-    """Convierte fecha ISO a DD/MM/YYYY HH:MM."""
     if not iso_str: return "-"
     try:
         dt = datetime.datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
@@ -77,11 +70,9 @@ def formatear_fecha(iso_str):
 
 @st.cache_data(ttl=900)
 def obtener_partidos_hoy_ordenados():
-    """Obtiene y ordena cronológicamente los partidos más cercanos."""
     hoy = datetime.date.today()
     desde = (hoy - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     hasta = (hoy + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    
     url = f"{BASE_URL}matches?dateFrom={desde}&dateTo={hasta}"
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
@@ -119,23 +110,18 @@ def obtener_historico_dos_anios(liga_code):
     return sorted(jugados, key=lambda x: x.get("utcDate", ""), reverse=True)
 
 # -----------------------------------------------------------------------------
-# 3. MÓDULOS DE PROCESAMIENTO
+# 3. MÓDULOS MATEMÁTICOS Y ESTADÍSTICOS
 # -----------------------------------------------------------------------------
-def generar_html_racha(df_partidos):
-    if df_partidos.empty: return "Sin datos"
-    html = ""
-    for _, row in df_partidos.head(5).iterrows():
-        est = row["Estado_Raw"]
-        if est == "V": html += '<span class="badge-v">V</span> '
-        elif est == "E": html += '<span class="badge-e">E</span> '
-        else: html += '<span class="badge-d">D</span> '
-    return html
-
-def obtener_ultimos_partidos(partidos_jugados, equipo_id, n=20):
-    partidos_eq = [m for m in partidos_jugados if m["homeTeam"]["id"] == equipo_id or m["awayTeam"]["id"] == equipo_id][:n]
+def obtener_ultimos_partidos(partidos_jugados, equipo_id, n=20, solo_condicion=None):
     rows = []
-    for m in partidos_eq:
+    for m in partidos_jugados:
         is_home = m["homeTeam"]["id"] == equipo_id
+        is_away = m["awayTeam"]["id"] == equipo_id
+        if not (is_home or is_away): continue
+        
+        if solo_condicion == "Local" and not is_home: continue
+        if solo_condicion == "Visitante" and not is_away: continue
+
         score = m["score"]["fullTime"]
         gf = score["home"] if is_home else score["away"]
         gc = score["away"] if is_home else score["home"]
@@ -151,58 +137,56 @@ def obtener_ultimos_partidos(partidos_jugados, equipo_id, n=20):
             "Condición": "Local" if is_home else "Visitante",
             "Resultado": f"{score['home']} - {score['away']}",
             "Estado_Raw": est_raw,
-            "Puntos": pts,
-            "GF": gf, "GC": gc
+            "Puntos": pts, "GF": gf, "GC": gc
         })
+        if len(rows) == n: break
     return pd.DataFrame(rows)
 
-def obtener_h2h(partidos_jugados, id_loc, id_vis):
-    matches = [
-        m for m in partidos_jugados 
-        if (m["homeTeam"]["id"] == id_loc and m["awayTeam"]["id"] == id_vis) or 
-           (m["homeTeam"]["id"] == id_vis and m["awayTeam"]["id"] == id_loc)
-    ]
-    w_loc, draws, w_vis = 0, 0, 0
-    rows = []
-    for m in matches:
-        s = m["score"]["fullTime"]
-        if s["home"] is None: continue
-        is_loc_home = (m["homeTeam"]["id"] == id_loc)
-        
-        if s["home"] > s["away"]:
-            if is_loc_home: w_loc += 1
-            else: w_vis += 1
-        elif s["home"] < s["away"]:
-            if is_loc_home: w_vis += 1
-            else: w_loc += 1
-        else: draws += 1
+def calcular_power_rating(df_20):
+    if df_20.empty: return 50.0
+    ult_5 = df_20.head(5)
+    ult_20 = df_20.head(20)
+    ppm_5 = ult_5["Puntos"].mean() / 3.0
+    ppm_20 = ult_20["Puntos"].mean() / 3.0
+    diff_goles = (ult_20["GF"].sum() - ult_20["GC"].sum()) / len(ult_20)
+    norm_diff_scaled = ((max(-1.0, min(1.0, diff_goles / 2.0))) + 1.0) / 2.0
+    rating = (ppm_5 * 40) + (ppm_20 * 30) + (norm_diff_scaled * 30)
+    return round(max(10.0, min(99.0, rating)), 1)
 
-        rows.append({
-            "Fecha": formatear_fecha(m.get("utcDate")),
-            "Local": m["homeTeam"]["name"],
-            "Marcador": f"{s['home']} - {s['away']}",
-            "Visitante": m["awayTeam"]["name"],
-            "Competición": m.get("competition", {}).get("name", "Liga")
-        })
-    return w_loc, draws, w_vis, pd.DataFrame(rows)
+def generar_html_racha(df_partidos):
+    if df_partidos.empty: return "Sin datos"
+    html = ""
+    for _, row in df_partidos.head(5).iterrows():
+        est = row["Estado_Raw"]
+        if est == "V": html += '<span class="badge-v">V</span> '
+        elif est == "E": html += '<span class="badge-e">E</span> '
+        else: html += '<span class="badge-d">D</span> '
+    return html
 
 def poisson_pmf(lmbda, k):
     return (lmbda ** k) * math.exp(-lmbda) / math.factorial(k) if lmbda > 0 else 0.0
 
-def calcular_matriz_marcadores_y_ou(exp_loc, exp_vis):
+def calcular_matrices_completas(exp_loc, exp_vis):
     marcadores = []
     ou_prob = {0.5: 0.0, 1.5: 0.0, 2.5: 0.0, 3.5: 0.0}
+    btts_yes = 0.0
+    prob_1, prob_x, prob_2 = 0.0, 0.0, 0.0
     
-    for g_loc in range(6):
-        for g_vis in range(6):
+    for g_loc in range(7):
+        for g_vis in range(7):
             p = poisson_pmf(exp_loc, g_loc) * poisson_pmf(exp_vis, g_vis)
             tot = g_loc + g_vis
+            
+            if g_loc > g_vis: prob_1 += p
+            elif g_loc == g_vis: prob_x += p
+            else: prob_2 += p
+
+            if g_loc > 0 and g_vis > 0: btts_yes += p
             
             marcadores.append({"Marcador Exacto": f"{g_loc} - {g_vis}", "Probabilidad": p * 100, "Cuota Justa": 1/p if p > 0 else 99.0})
             
             for line in ou_prob.keys():
-                if tot > line:
-                    ou_prob[line] += p
+                if tot > line: ou_prob[line] += p
                     
     df_m = pd.DataFrame(marcadores).sort_values(by="Probabilidad", ascending=False).reset_index(drop=True)
     df_m["Probabilidad"] = df_m["Probabilidad"].map("{:.1f}%".format)
@@ -218,35 +202,50 @@ def calcular_matriz_marcadores_y_ou(exp_loc, exp_vis):
             "Under Prob.": f"{prob_under*100:.1f}%",
             "Cuota Under": f"@{1/prob_under:.2f}" if prob_under > 0 else "-"
         })
+        
+    btts_no = 1.0 - btts_yes
+    df_btts = pd.DataFrame([
+        {"Mercado": "Ambos Anotan (Sí)", "Probabilidad": f"{btts_yes*100:.1f}%", "Cuota Justa": f"@{1/btts_yes:.2f}"},
+        {"Mercado": "Ambos Anotan (No)", "Probabilidad": f"{btts_no*100:.1f}%", "Cuota Justa": f"@{1/btts_no:.2f}"}
+    ])
+
+    return prob_1, prob_x, prob_2, df_m.head(8), pd.DataFrame(ou_rows), df_btts
+
+def ejecucion_monte_carlo(exp_loc, exp_vis, n_sims=10000):
+    loc_goals = np.random.poisson(exp_loc, n_sims)
+    vis_goals = np.random.poisson(exp_vis, n_sims)
     
-    return df_m.head(8), pd.DataFrame(ou_rows)
+    diffs = loc_goals - vis_goals
+    goleada_loc = np.sum(diffs >= 3) / n_sims
+    goleada_vis = np.sum(diffs <= -3) / n_sims
+    
+    loc_ht = np.random.poisson(exp_loc * 0.42, n_sims)
+    vis_ht = np.random.poisson(exp_vis * 0.42, n_sims)
+    ht_1 = np.sum(loc_ht > vis_ht) / n_sims
+    ht_x = np.sum(loc_ht == vis_ht) / n_sims
+    ht_2 = np.sum(loc_ht < vis_ht) / n_sims
+
+    return goleada_loc, goleada_vis, ht_1, ht_x, ht_2
 
 # -----------------------------------------------------------------------------
-# 4. VISTA DE EVENTOS Y SELECCIÓN DIRECTA
+# 4. VISTA DE EVENTOS Y SELECCIÓN
 # -----------------------------------------------------------------------------
 st.title("⚽ Football Analytics Engine")
 
 partidos_hoy = obtener_partidos_hoy_ordenados()
 
-with st.expander("📅 **PRÓXIMOS PARTIDOS / EVENTOS (SELECCIÓN RÁPIDA)**", expanded=True):
+with st.expander("📅 **PARTIDOS DEL DÍA (SELECCIÓN RÁPIDA)**", expanded=True):
     if partidos_hoy:
         opciones_map = {
             f"[{m.get('competition',{}).get('code','-')}] {formatear_fecha(m.get('utcDate'))} | {m['homeTeam']['name']} vs {m['awayTeam']['name']}": m 
             for m in partidos_hoy
         }
-        
-        partido_sel_key = st.selectbox(
-            "👉 Selecciona un partido de la lista para cargarlo inmediatamente:",
-            options=list(opciones_map.keys()),
-            index=0
-        )
-        
+        partido_sel_key = st.selectbox("👉 Selecciona un partido de hoy:", options=list(opciones_map.keys()), index=0)
         partido_obj = opciones_map[partido_sel_key]
         st.session_state["liga_auto"] = partido_obj.get("competition", {}).get("code", "PD")
         st.session_state["loc_auto"] = partido_obj["homeTeam"]["name"]
         st.session_state["vis_auto"] = partido_obj["awayTeam"]["name"]
 
-        st.markdown("##### Próximos 5 encuentros más cercanos:")
         cols = st.columns(min(5, len(partidos_hoy)))
         for idx, m in enumerate(partidos_hoy[:5]):
             with cols[idx]:
@@ -256,24 +255,21 @@ with st.expander("📅 **PRÓXIMOS PARTIDOS / EVENTOS (SELECCIÓN RÁPIDA)**", e
                     <strong>{m['homeTeam']['name']}</strong><br>vs<br><strong>{m['awayTeam']['name']}</strong>
                 </div>
                 """, unsafe_allow_html=True)
-    else:
-        st.info("No hay partidos próximos programados en las ligas monitoreadas.")
 
 st.divider()
 
 # -----------------------------------------------------------------------------
-# 5. CONTROLES Y ANÁLISIS
+# 5. CONTROLES Y PROCESAMIENTO
 # -----------------------------------------------------------------------------
+st.sidebar.header("⚙️ Selector & Filtros")
 liga_default = st.session_state.get("liga_auto", "PD")
 liga_keys = list(LIGAS.keys())
 idx_liga = liga_keys.index(liga_default) if liga_default in liga_keys else 0
 
-st.sidebar.header("⚙️ Selector Manual")
 liga_sel = st.sidebar.selectbox("Competición", liga_keys, index=idx_liga, format_func=lambda x: LIGAS[x])
-
 equipos = obtener_equipos(liga_sel)
 if not equipos:
-    st.error("No se pudieron cargar los equipos de esta competición.")
+    st.error("Error al cargar equipos.")
     st.stop()
 
 equipos_dict = {e["nombre"]: e for e in equipos}
@@ -288,31 +284,35 @@ vis_idx = nombres_eq.index(vis_def) if vis_def in nombres_eq else (1 if len(nomb
 local_nom = st.sidebar.selectbox("Equipo Local", nombres_eq, index=loc_idx)
 visitante_nom = st.sidebar.selectbox("Equipo Visitante", [e for e in nombres_eq if e != local_nom], index=0 if loc_idx != 0 else vis_idx)
 
-eq_loc = equipos_dict[local_nom]
-eq_vis = equipos_dict[visitante_nom]
+# NUEVO: FILTRO LOCAL / VISITANTE
+filtro_condicion = st.sidebar.radio("Filtro de Historial", ["Global (Todos)", "Condición Específica (Casa/Fuera)"])
 
+eq_loc, eq_vis = equipos_dict[local_nom], equipos_dict[visitante_nom]
 jugados = obtener_historico_dos_anios(liga_sel)
 
-df_loc_20 = obtener_ultimos_partidos(jugados, eq_loc["id"], n=20)
-df_vis_20 = obtener_ultimos_partidos(jugados, eq_vis["id"], n=20)
+cond_loc = "Local" if filtro_condicion.startswith("Condición") else None
+cond_vis = "Visitante" if filtro_condicion.startswith("Condición") else None
+
+df_loc_20 = obtener_ultimos_partidos(jugados, eq_loc["id"], n=20, solo_condicion=cond_loc)
+df_vis_20 = obtener_ultimos_partidos(jugados, eq_vis["id"], n=20, solo_condicion=cond_vis)
+
+pr_loc = calcular_power_rating(df_loc_20)
+pr_vis = calcular_power_rating(df_vis_20)
 
 html_racha_loc = generar_html_racha(df_loc_20)
 html_racha_vis = generar_html_racha(df_vis_20)
 
-# CÁLCULOS ESTADÍSTICOS
-exp_local = 1.45 # Medias base optimizadas
-exp_vis = 1.10
-prob_1, prob_x, prob_2 = 0.48, 0.27, 0.25
+exp_local, exp_vis = 1.45, 1.10
+prob_1, prob_x, prob_2, df_top_m, df_ou, df_btts = calcular_matrices_completas(exp_local, exp_vis)
 
-df_top_marcadores, df_ou = calcular_matriz_marcadores_y_ou(exp_local, exp_vis)
-
-# TABLERO PRINCIPAL
+# TABLERO DE MARCADOR
 st.markdown(f"""
 <div class="scoreboard">
     <div style="display:flex; justify-content:space-around; align-items:center;">
         <div style="flex:1;">
-            <img src="{eq_loc['crest']}" height="65"><br>
-            <h2 style="margin:5px 0; color:white;">{local_nom}</h2>
+            <img src="{eq_loc['crest']}" height="60"><br>
+            <h2 style="margin:4px 0; color:white;">{local_nom}</h2>
+            <span class="power-badge">Power Rating: {pr_loc}</span><br><br>
             <div>{html_racha_loc}</div>
         </div>
         <div style="flex:1; background:rgba(0,0,0,0.3); padding:15px; border-radius:10px; border:1px solid #1e2d3d;">
@@ -321,8 +321,9 @@ st.markdown(f"""
             <small>xG Estimado: {exp_local:.2f} - {exp_vis:.2f}</small>
         </div>
         <div style="flex:1;">
-            <img src="{eq_vis['crest']}" height="65"><br>
-            <h2 style="margin:5px 0; color:white;">{visitante_nom}</h2>
+            <img src="{eq_vis['crest']}" height="60"><br>
+            <h2 style="margin:4px 0; color:white;">{visitante_nom}</h2>
+            <span class="power-badge">Power Rating: {pr_vis}</span><br><br>
             <div>{html_racha_vis}</div>
         </div>
     </div>
@@ -330,67 +331,105 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 6. PESTAÑAS DETALLADAS
+# 6. PESTAÑAS AMPLIADAS
 # -----------------------------------------------------------------------------
-tab_marcad, tab_ou, tab_h2h, tab_form = st.tabs([
-    "🎯 Marcador Esperado & 1X2", 
-    "⚽ Mercados Over / Under (0.5 - 3.5)",
-    "⚔️ Enfrentamientos Directos (H2H)", 
-    "📈 ÚLTIMOS 20 PARTIDOS Y FORMA"
+tab_marcad, tab_btts_ou, tab_value, tab_montecarlo, tab_form = st.tabs([
+    "🎯 Marcador & 1X2", 
+    "⚽ Goles & BTTS",
+    "🧮 Calculadora +EV & Kelly",
+    "🎲 Monte Carlo (10k Sims)",
+    "📈 Evolución & Historial"
 ])
 
 with tab_marcad:
     st.subheader("🎯 Marcadores Exactos Más Probables")
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns(2)
     with col1:
-        st.markdown("##### Resultados más probables (Según modelo de Poisson)")
-        st.dataframe(df_top_marcadores, use_container_width=True, hide_index=True)
+        st.dataframe(df_top_m, use_container_width=True, hide_index=True)
     with col2:
-        st.markdown("##### Cuotas Justas 1X2 Estimadas")
+        st.markdown("##### Cuotas Justas Estimadas")
         st.metric(f"Victoria {local_nom}", f"@{1/prob_1:.2f}", f"{prob_1*100:.1f}%")
         st.metric("Empate", f"@{1/prob_x:.2f}", f"{prob_x*100:.1f}%")
         st.metric(f"Victoria {visitante_nom}", f"@{1/prob_2:.2f}", f"{prob_2*100:.1f}%")
 
-with tab_ou:
-    st.subheader("⚽ Análisis Ampliado de Goles: Over / Under (0.5 a 3.5)")
-    st.dataframe(df_ou, use_container_width=True, hide_index=True)
+with tab_btts_ou:
+    col_b, col_o = st.columns(2)
+    with col_b:
+        st.subheader("🤝 Ambos Equipos Anotan (BTTS)")
+        st.dataframe(df_btts, use_container_width=True, hide_index=True)
+    with col_o:
+        st.subheader("⚽ Líneas Over / Under")
+        st.dataframe(df_ou, use_container_width=True, hide_index=True)
 
-with tab_h2h:
-    w_loc, draws, w_vis, df_h2h = obtener_h2h(jugados, eq_loc["id"], eq_vis["id"])
-    st.subheader(f"⚔️ Historial Cara a Cara ({len(df_h2h)} partidos)")
+with tab_value:
+    st.subheader("🧮 Calculadora de Value Bets y Criterio de Kelly")
+    st.write("Escribe la cuota ofrecida por tu casa de apuestas para evaluar si tiene Valor Positivo (+EV).")
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric(f"Victorias {local_nom}", w_loc)
-    c2.metric("Empates", draws)
-    c3.metric(f"Victorias {visitante_nom}", w_vis)
+    col_v1, col_v2, col_v3 = st.columns(3)
     
-    if not df_h2h.empty:
-        st.dataframe(df_h2h, use_container_width=True, hide_index=True)
-    else:
-        st.info("Sin enfrentamientos directos registrados en las últimas temporadas.")
+    with col_v1:
+        sint_opcion = st.selectbox("Selecciona Selección", [f"Victoria {local_nom}", "Empate", f"Victoria {visitante_nom}"])
+        cuota_bookie = st.number_input("Cuota de la Casa de Apuestas", min_value=1.01, value=2.10, step=0.05)
+        bankroll = st.number_input("Tu Bankroll Total (€)", min_value=10.0, value=1000.0, step=50.0)
+    
+    prob_estimada = prob_1 if sint_opcion.startswith("Victoria " + local_nom) else (prob_x if sint_opcion == "Empate" else prob_2)
+    
+    ev = (prob_estimada * cuota_bookie) - 1.0
+    b = cuota_bookie - 1.0
+    f_kelly = max(0.0, (b * prob_estimada - (1.0 - prob_estimada)) / b)
+    kelly_fraccional = f_kelly * 0.25 # Criterio Kelly Fraccional (1/4) por prudencia
+    stake_sugerido = bankroll * kelly_fraccional
+
+    with col_v2:
+        st.metric("Probabilidad Estimada del Modelo", f"{prob_estimada*100:.1f}%")
+        st.metric("Cuota Justa Calculada", f"@{1/prob_estimada:.2f}")
+    
+    with col_v3:
+        if ev > 0:
+            st.success(f"✅ ¡APUESTA CON VALOR POSITIVO! (+EV: {ev*100:.1f}%)")
+            st.metric("Stake Recomendado (1/4 Kelly)", f"{stake_sugerido:.2f} €", f"{kelly_fraccional*100:.2f}% del bank")
+        else:
+            st.error(f"❌ SIN VALOR (+EV: {ev*100:.1f}%)")
+            st.warning("La cuota de la casa de apuestas es menor a la cuota justa real. Se aconseja No Apostar.")
+
+with tab_montecarlo:
+    st.subheader("🎲 Simulación Estocástica de Monte Carlo (10,000 Partidos)")
+    if st.button("🚀 Ejecutar 10,000 Simulaciones en Vivo"):
+        gol_l, gol_v, ht1, htx, ht2 = ejecucion_monte_carlo(exp_local, exp_vis)
+        
+        mc1, mc2 = st.columns(2)
+        with mc1:
+            st.markdown("##### Probabilidades al Descanso (HT)")
+            st.write(f"**Local lidera al descanso:** `{ht1*100:.1f}%`")
+            st.write(f"**Empate al descanso:** `{htx*100:.1f}%`")
+            st.write(f"**Visitante lidera al descanso:** `{ht2*100:.1f}%`")
+        
+        with mc2:
+            st.markdown("##### Probabilidad de Goleada (Diferencia ≥ 3 Goles)")
+            st.metric(f"Goleada de {local_nom}", f"{gol_l*100:.1f}%")
+            st.metric(f"Goleada de {visitante_nom}", f"{gol_v*100:.1f}%")
 
 with tab_form:
-    st.subheader("📈 Registro de los Últimos 20 Partidos con Fecha")
-    f_col1, f_col2 = st.columns(2)
+    st.subheader("📈 Evolución de Puntos y Registro")
     
+    # GRÁFICO DE EVOLUCIÓN
+    if not df_loc_20.empty and not df_vis_20.empty:
+        pts_loc_cum = df_loc_20.iloc[::-1]["Puntos"].cumsum().tolist()
+        pts_vis_cum = df_vis_20.iloc[::-1]["Puntos"].cumsum().tolist()
+        
+        df_chart = pd.DataFrame({
+            f"{local_nom} (Puntos Acum.)": pts_loc_cum,
+            f"{visitante_nom} (Puntos Acum.)": pts_vis_cum
+        })
+        st.markdown("##### Evolución de Puntos Acumulados en la Muestra")
+        st.line_chart(df_chart)
+
+    f_col1, f_col2 = st.columns(2)
     with f_col1:
         st.markdown(f"### 🏠 {local_nom}")
-        st.markdown(f"**Racha Reciente:** {html_racha_loc}", unsafe_allow_html=True)
-        if not df_loc_20.empty:
-            st.dataframe(
-                df_loc_20[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), 
-                use_container_width=True, 
-                hide_index=True,
-                height=400
-            )
-
+        st.markdown(f"**Power Rating:** `{pr_loc}/100` | **Racha:** {html_racha_loc}", unsafe_allow_html=True)
+        st.dataframe(df_loc_20[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), use_container_width=True, hide_index=True, height=350)
     with f_col2:
         st.markdown(f"### ✈️ {visitante_nom}")
-        st.markdown(f"**Racha Reciente:** {html_racha_vis}", unsafe_allow_html=True)
-        if not df_vis_20.empty:
-            st.dataframe(
-                df_vis_20[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), 
-                use_container_width=True, 
-                hide_index=True,
-                height=400
-            )
+        st.markdown(f"**Power Rating:** `{pr_vis}/100` | **Racha:** {html_racha_vis}", unsafe_allow_html=True)
+        st.dataframe(df_vis_20[["Fecha", "Condición", "Rival", "Resultado", "Estado_Raw"]].rename(columns={"Estado_Raw": "Res"}), use_container_width=True, hide_index=True, height=350)
